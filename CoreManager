@@ -530,7 +530,7 @@ local function fetchServers()
                 { BorderColor3 = 'OutlineColor' }
             )
             
-            btn.MouseButton1Click:Connect(function()
+            btn.MouseButton1Click:Connect(function() 
                 joinServer(server.id) -- server.id is the JobId
             end)
         end
