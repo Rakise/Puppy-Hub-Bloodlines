@@ -272,4 +272,4 @@ SaveManager:SetFolder('PuppyHub/Bloodlines')
 ThemeManager:ApplyToTab(Tabs.Settings)
 SaveManager:BuildConfigSection(Tabs.Settings)
 
-print("[Puppy Hub] Bloodlines Edition Loaded"
+print("[Puppy Hub] Bloodlines Edition Loaded")
