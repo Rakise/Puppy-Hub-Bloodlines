@@ -1,6 +1,7 @@
 -- ServerBrowserHandler.lua
 -- Replicates GuiHandler logic for Bloodlines
 -- Sources data from ReplicatedStorage.Servers
+-- FIX: ZIndex updated to 10
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Players = game:GetService("Players")
@@ -13,7 +14,6 @@ function ServerBrowserHandler.new()
     self.container = nil
     self.serverButtons = {}
     
-    -- Wait for critical folders
     self.serversFolder = ReplicatedStorage:WaitForChild("Servers", 5)
     self.eventsFolder = ReplicatedStorage:WaitForChild("Events", 5)
     
@@ -24,39 +24,29 @@ function ServerBrowserHandler:Initialize(containerFrame)
     self.container = containerFrame
     self:Refresh()
     
-    -- Auto-refresh on list changes? Optional, but Refresh button is safer for performance
     if self.serversFolder then
         self.serversFolder.ChildAdded:Connect(function() 
-            -- Optional: self:Refresh() 
-        end)
-        self.serversFolder.ChildRemoved:Connect(function()
-            -- Optional: self:Refresh()
+             -- self:Refresh() -- Optional auto-refresh
         end)
     end
 end
 
 function ServerBrowserHandler:Clear()
     if not self.container then return end
-    
     for _, btn in pairs(self.serverButtons) do
         btn:Destroy()
     end
     self.serverButtons = {}
-    
-    -- Reset canvas
     self.container.CanvasSize = UDim2.new(0, 0, 0, 0)
 end
 
 function ServerBrowserHandler:JoinServer(serverId)
     if not self.eventsFolder then return end
-    
     local dataEvent = self.eventsFolder:FindFirstChild("DataEvent")
     if dataEvent and dataEvent:IsA("RemoteEvent") then
-        -- Logic from GuiHandler: FireServer("ServerTeleport", ServerID, 14)
-        print("[ServerBrowser] Joining Server:", serverId)
         dataEvent:FireServer("ServerTeleport", serverId, 14)
     else
-        warn("[ServerBrowser] Critical Error: DataEvent not found in ReplicatedStorage.Events")
+        warn("DataEvent not found!")
     end
 end
 
@@ -64,58 +54,42 @@ function ServerBrowserHandler:CreateServerButton(serverValueObj)
     if not self.container then return end
     if not serverValueObj:IsA("StringValue") then return end
     
-    -- GuiHandler Logic:
-    -- Value format seems to be: "ServerID PlayerCount"
-    -- Name is the Server Name
-    
     local rawValue = serverValueObj.Value
     local splitData = string.split(rawValue, ' ')
-    
     local serverId = splitData[1]
     local playerCount = splitData[2] or "?"
     local serverName = serverValueObj.Name
     
-    -- Determine Region
     local region = "Unknown"
     local regionObj = serverValueObj:FindFirstChild("Region")
-    if regionObj then
-        region = regionObj.Value
-    end
+    if regionObj then region = regionObj.Value end
     
-    -- Check if it's the current server
     local isCurrent = serverValueObj:FindFirstChild("Current") ~= nil
-    
-    -- Formatting Text
     local displayText = string.format("%s | %s | %s/20", serverName, region, playerCount)
-    if isCurrent then
-        displayText = "[Current] " .. displayText
-    end
+    if isCurrent then displayText = "[Current] " .. displayText end
     
-    -- Create Button
     local btn = Instance.new("TextButton")
-    btn.Name = serverName -- Used for search filtering
-    btn.Size = UDim2.new(1, -4, 0, 30) -- Padding for scrollbar
+    btn.Name = serverName
+    btn.Size = UDim2.new(1, -4, 0, 30)
     btn.BackgroundColor3 = isCurrent and Color3.fromRGB(60, 80, 60) or Color3.fromRGB(40, 40, 40)
     btn.BorderColor3 = Color3.fromRGB(0, 0, 0)
     btn.TextColor3 = Color3.fromRGB(255, 255, 255)
-    btn.Text = "  " .. displayText -- Tiny padding
+    btn.Text = "  " .. displayText
     btn.TextXAlignment = Enum.TextXAlignment.Left
     btn.Font = Enum.Font.SourceSansSemibold
     btn.TextSize = 14
+    btn.ZIndex = 10 -- FIX: High ZIndex to ensure visibility
     btn.Parent = self.container
     
-    -- Layout Order: Sort by Player Count Descending
-    -- Use negative number so higher player count (e.g. 15) becomes -15, appearing before -2
     local sortOrder = tonumber(playerCount) or 0
     btn.LayoutOrder = -sortOrder
     
-    -- Click Logic
     if not isCurrent then
         btn.MouseButton1Click:Connect(function()
             self:JoinServer(serverId)
         end)
     else
-        btn.AutoButtonColor = false -- Disable click effect for current server
+        btn.AutoButtonColor = false
         btn.TextTransparency = 0.5
     end
     
@@ -124,26 +98,16 @@ end
 
 function ServerBrowserHandler:Refresh()
     self:Clear()
-    
-    if not self.serversFolder then 
-        warn("[ServerBrowser] ReplicatedStorage.Servers folder missing!")
-        return 
-    end
+    if not self.serversFolder then return end
     
     local children = self.serversFolder:GetChildren()
-    
     for _, child in ipairs(children) do
-        -- Use pcall to prevent one bad value breaking the whole list
-        pcall(function()
-            self:CreateServerButton(child)
-        end)
+        pcall(function() self:CreateServerButton(child) end)
     end
     
-    -- Update ScrollingFrame Canvas Size
     if self.container then
         local layout = self.container:FindFirstChildOfClass("UIListLayout")
         if layout then
-            -- Calculate size based on content
             self.container.CanvasSize = UDim2.new(0, 0, 0, layout.AbsoluteContentSize.Y)
         end
     end
@@ -152,13 +116,8 @@ end
 function ServerBrowserHandler:Search(query)
     if not self.container then return end
     query = query:lower()
-    
     local visibleCount = 0
-    local itemHeight = 30
-    local padding = 2
-    
     for _, btn in ipairs(self.serverButtons) do
-        -- Search by Server Name
         if query == "" or btn.Name:lower():find(query) then
             btn.Visible = true
             visibleCount = visibleCount + 1
@@ -166,10 +125,7 @@ function ServerBrowserHandler:Search(query)
             btn.Visible = false
         end
     end
-    
-    -- Recalculate canvas size for filtered results
-    local totalHeight = visibleCount * (itemHeight + padding)
-    self.container.CanvasSize = UDim2.new(0, 0, 0, totalHeight)
+    self.container.CanvasSize = UDim2.new(0, 0, 0, visibleCount * 32)
 end
 
 return ServerBrowserHandler

@@ -1,8 +1,7 @@
 -- ItemESPHandler.lua
 -- Unified handler for Trinkets, Fruits, and Gems
--- OPTIMIZED: Lazy Loading System (Prevents Crashes)
--- Only creates billboards when items are CLOSE.
--- Throttles creation to prevent CPU spikes.
+-- FIX: Pending/Retry system to catch items that load their properties late
+-- FIX: Proper cleanup on disable
 
 local CoreGui = game:GetService("CoreGui")
 local Workspace = game:GetService("Workspace")
@@ -20,8 +19,8 @@ local COLORS = {
 }
 
 -- Configuration
-local RENDER_DISTANCE = 1500 -- Only create visual if closer than this
-local PROCESS_RATE = 25 -- How many items to check/update per frame (Higher = faster load, Lower = less lag)
+local RENDER_DISTANCE = 1500 
+local PROCESS_RATE = 25 
 
 function ItemESPHandler.new()
     local self = setmetatable({}, ItemESPHandler)
@@ -31,28 +30,23 @@ function ItemESPHandler.new()
         Gem = false
     }
     
-    -- Data Structures
-    -- validItems: [Object] = {Type="...", Name="...", Proxy=part/nil, Billboard=gui/nil}
-    self.validItems = {} 
+    -- Lists
+    self.validItems = {}   -- [Obj] = {Type, Name, Billboard, Proxy}
+    self.pendingItems = {} -- [Obj] = timestamp (Waiting for ID/ObjectValue to load)
     
     self.connections = {}
-    self.isScanning = false
     self.localPlayer = Players.LocalPlayer
     return self
 end
 
--- Helper to get CFrame safely
 function ItemESPHandler:GetCFrame(obj)
-    if obj:IsA("Model") then
-        return obj:GetPivot()
-    elseif obj:IsA("BasePart") then
-        return obj.CFrame
-    end
+    if obj:IsA("Model") then return obj:GetPivot()
+    elseif obj:IsA("BasePart") then return obj.CFrame end
     return CFrame.new()
 end
 
 function ItemESPHandler:Identify(obj)
-    -- Validation: Must have "ID" and "ObjectValue" children
+    -- Strict Validation: Must have ID and ObjectValue
     if not obj:FindFirstChild("ID") or not obj:FindFirstChild("ObjectValue") then
         return nil
     end
@@ -60,61 +54,42 @@ function ItemESPHandler:Identify(obj)
     local isMesh = obj:IsA("MeshPart")
     local name = obj.Name
     
-    -- LOGIC:
-    -- 1. If Attribute "RealName" exists -> TRINKET
-    -- 2. Else if Name contains "Gem" -> GEM
-    -- 3. Else (and is MeshPart) -> FRUIT
-    
     local realNameAttr = obj:GetAttribute("RealName")
+    if realNameAttr then return "Trinket", realNameAttr end
     
-    if realNameAttr then
-        return "Trinket", realNameAttr
-    end
-    
-    if isMesh and string.find(name, "Gem") then
-        return "Gem", name
-    end
-    
-    if isMesh then
-        return "Fruit", name
-    end
+    if isMesh and string.find(name, "Gem") then return "Gem", name end
+    if isMesh then return "Fruit", name end
     
     return nil
 end
 
--- Register an object as a potential ESP target (Does NOT create GUI yet)
-function ItemESPHandler:RegisterObject(obj)
-    if self.validItems[obj] then return end -- Already registered
+-- Called when a child is added (Workspace or ReplicatedStorage)
+function ItemESPHandler:OnItemAdded(obj)
+    if self.validItems[obj] or self.pendingItems[obj] then return end
     
-    -- Spread the load: wait a tiny bit if this is called in a loop
-    -- Note: We handle throttling in the main Scan loop, so direct calls (ChildAdded) are fine
-    
-    local typeStr, nameStr = self:Identify(obj)
-    if typeStr then
-        self.validItems[obj] = {
-            Type = typeStr,
-            Name = nameStr,
-            Billboard = nil,
-            Proxy = nil
-        }
+    -- Filter: Only care about Models or MeshParts
+    if obj:IsA("Model") or obj:IsA("MeshPart") then
+        -- Add to pending to check later (gives time for children to replicate)
+        self.pendingItems[obj] = tick()
     end
 end
 
-function ItemESPHandler:UnregisterObject(obj)
+function ItemESPHandler:OnItemRemoved(obj)
+    self.pendingItems[obj] = nil
+    
     local data = self.validItems[obj]
     if data then
-        if data.Billboard then data.Billboard:Destroy() end
-        if data.Proxy then data.Proxy:Destroy() end
+        self:DestroyVisuals(data)
         self.validItems[obj] = nil
     end
 end
 
 function ItemESPHandler:CreateVisuals(obj, data)
-    if data.Billboard then return end -- Already created
+    if data.Billboard then return end
     
     local adornee = obj
     
-    -- Handle ReplicatedStorage items via Proxy
+    -- ReplicatedStorage Proxy Logic
     if obj:IsDescendantOf(ReplicatedStorage) then
         if not data.Proxy then
             local proxy = Instance.new("Part")
@@ -151,41 +126,36 @@ function ItemESPHandler:CreateVisuals(obj, data)
 end
 
 function ItemESPHandler:DestroyVisuals(data)
-    if data.Billboard then
-        data.Billboard:Destroy()
-        data.Billboard = nil
-    end
-    if data.Proxy then
-        data.Proxy:Destroy()
-        data.Proxy = nil
-    end
+    if data.Billboard then data.Billboard:Destroy() data.Billboard = nil end
+    if data.Proxy then data.Proxy:Destroy() data.Proxy = nil end
 end
 
--- Heavy Scan: Runs once on enable, yields to prevent crash
-function ItemESPHandler:FullScan()
-    local objectsToCheck = {}
-    
-    -- Gather all potential objects first
-    for _, obj in ipairs(Workspace:GetChildren()) do
-        table.insert(objectsToCheck, obj)
-    end
-    for _, obj in ipairs(ReplicatedStorage:GetChildren()) do
-        table.insert(objectsToCheck, obj)
-    end
-    
-    -- Process in chunks
-    local count = 0
-    for _, obj in ipairs(objectsToCheck) do
-        self:RegisterObject(obj)
-        count = count + 1
-        if count % 100 == 0 then
-            task.wait() -- Yield every 100 items to keep FPS smooth
+-- Slow Loop: Checks pending items to see if they have loaded enough to be identified
+function ItemESPHandler:ValidationLoop()
+    for obj, startTime in pairs(self.pendingItems) do
+        if not obj.Parent then
+            self.pendingItems[obj] = nil
+        else
+            local typeStr, nameStr = self:Identify(obj)
+            if typeStr then
+                -- Success! It's a valid item now
+                self.validItems[obj] = {
+                    Type = typeStr,
+                    Name = nameStr,
+                    Billboard = nil,
+                    Proxy = nil
+                }
+                self.pendingItems[obj] = nil -- Remove from pending
+            elseif tick() - startTime > 10 then
+                -- Timeout after 10 seconds of failing to identify (probably not an item)
+                self.pendingItems[obj] = nil 
+            end
         end
     end
 end
 
--- Main Loop: Manages Distance & Visibility
-function ItemESPHandler:UpdateLoop()
+-- Fast Loop: Handles visuals based on distance/settings
+function ItemESPHandler:RenderLoop()
     if not self.localPlayer.Character then return end
     local hrp = self.localPlayer.Character:FindFirstChild("HumanoidRootPart")
     if not hrp then return end
@@ -194,87 +164,76 @@ function ItemESPHandler:UpdateLoop()
     local processed = 0
     
     for obj, data in pairs(self.validItems) do
-        -- 1. Check if category enabled
-        if self.settings[data.Type] then
-            
-            -- 2. Check Distance
-            local targetCFrame = (data.Proxy and data.Proxy.CFrame) or self:GetCFrame(obj)
-            local dist = (targetCFrame.Position - myPos).Magnitude
-            
-            if dist <= RENDER_DISTANCE then
-                -- Close enough: Create
-                if not data.Billboard then
-                    self:CreateVisuals(obj, data)
+        -- Ensure object still exists
+        if not obj.Parent then
+            self:OnItemRemoved(obj)
+        else
+            -- Logic
+            if self.settings[data.Type] then
+                local targetCFrame = (data.Proxy and data.Proxy.CFrame) or self:GetCFrame(obj)
+                local dist = (targetCFrame.Position - myPos).Magnitude
+                
+                if dist <= RENDER_DISTANCE then
+                    if not data.Billboard then self:CreateVisuals(obj, data) end
+                else
+                    if data.Billboard then self:DestroyVisuals(data) end
                 end
             else
-                -- Too far: Destroy (Save memory)
-                if data.Billboard then
-                    self:DestroyVisuals(data)
-                end
-            end
-            
-        else
-            -- Category disabled: Destroy
-            if data.Billboard then
-                self:DestroyVisuals(data)
+                if data.Billboard then self:DestroyVisuals(data) end
             end
         end
         
-        -- Throttling: Only process X items per frame
         processed = processed + 1
-        if processed >= PROCESS_RATE then
-            return -- Stop for this frame, continue next frame (Lua loops resume automatically if we used coroutine, but here we rely on RunService calling this again. Actually, this naive loop restarts every frame. For true cycling we need an index, but iterating pairs is random. Given Lua speed, iterating the table is fast, the EXPENSIVE part is Create/Destroy.)
-            -- Optimization: We only return if we did "Heavy Work" (Create/Destroy).
-            -- Simple distance check is fast enough to do all ~500 items per frame.
-            -- Creating instances is the bottleneck.
-        end
+        if processed > PROCESS_RATE then break end -- Throttle updates per frame
     end
 end
 
 function ItemESPHandler:Start()
-    if self.connections.Update then return end
+    if self.connections.Render then return end
     
-    -- Initial Async Scan
-    task.spawn(function()
-        self:FullScan()
-    end)
+    -- Initial Scan
+    for _, v in ipairs(Workspace:GetChildren()) do self:OnItemAdded(v) end
+    for _, v in ipairs(ReplicatedStorage:GetChildren()) do self:OnItemAdded(v) end
     
     -- Listeners
-    self.connections.WsAdd = Workspace.ChildAdded:Connect(function(c) 
-        task.delay(0.5, function() if c.Parent then self:RegisterObject(c) end end) 
-    end)
-    self.connections.WsRem = Workspace.ChildRemoved:Connect(function(c) self:UnregisterObject(c) end)
+    self.connections.WsAdd = Workspace.ChildAdded:Connect(function(c) self:OnItemAdded(c) end)
+    self.connections.WsRem = Workspace.ChildRemoved:Connect(function(c) self:OnItemRemoved(c) end)
+    self.connections.RsAdd = ReplicatedStorage.ChildAdded:Connect(function(c) self:OnItemAdded(c) end)
+    self.connections.RsRem = ReplicatedStorage.ChildRemoved:Connect(function(c) self:OnItemRemoved(c) end)
     
-    self.connections.RsAdd = ReplicatedStorage.ChildAdded:Connect(function(c) 
-        task.delay(0.5, function() if c.Parent then self:RegisterObject(c) end end) 
-    end)
-    self.connections.RsRem = ReplicatedStorage.ChildRemoved:Connect(function(c) self:UnregisterObject(c) end)
+    -- Loops
+    self.connections.Render = RunService.Heartbeat:Connect(function() self:RenderLoop() end)
     
-    -- Render Loop
-    self.connections.Update = RunService.Heartbeat:Connect(function()
-        self:UpdateLoop()
+    -- Run validation every 0.5s (2Hz)
+    self.connections.Validation = RunService.Heartbeat:Connect(function()
+        if tick() % 0.5 < 0.1 then
+            self:ValidationLoop()
+        end
     end)
 end
 
 function ItemESPHandler:Stop()
-    for _, conn in pairs(self.connections) do conn:Disconnect() end
+    for _, c in pairs(self.connections) do c:Disconnect() end
     self.connections = {}
     
+    -- Clean Visuals
     for _, data in pairs(self.validItems) do
         self:DestroyVisuals(data)
     end
+    
+    -- Clean Lists
     self.validItems = {}
+    self.pendingItems = {}
 end
 
 function ItemESPHandler:toggleCategory(cat, val)
     self.settings[cat] = val
     
-    -- Check if any active
     local anyActive = self.settings.Trinket or self.settings.Fruit or self.settings.Gem
     
-    if anyActive and not self.connections.Update then
+    if anyActive and not self.connections.Render then
         self:Start()
-    elseif not anyActive and self.connections.Update then
+    elseif not anyActive and self.connections.Render then
         self:Stop()
     end
 end
