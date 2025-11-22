@@ -1,14 +1,3 @@
---[[
-    Puppy-Hub CoreManager (Bloodlines Edition)
-    Updated Features:
-    - Native Server Browser (Integrated via Library components)
-    - Movement: Fly, Noclip, CFrame Speed, WalkSpeed/JumpPower
-    - Panic Mode: INSTANTLY disables ALL movement hacks when "Chakra Sense" is equipped.
-    - Standard Modules: ESP, TransTrail, etc.
-    - REMOVED: AutoAim (Requested)
-    - FIX: Does not force default WalkSpeed/JumpPower when disabled/panic (prevents overriding game mechanics)
-]]
-
 -- Services
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
