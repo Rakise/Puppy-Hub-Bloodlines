@@ -1,10 +1,10 @@
 -- ChakraESPHandler.lua
 -- Handles ESP for Chakra Points located in workspace.ChakraPoints
--- Models lack PrimaryParts, so we find the first BasePart for adornee.
+-- OPTIMIZED: No per-frame Lua loops. Relies on Engine C++ for rendering.
+-- Full Map (Infinite Distance)
 
 local CoreGui = game:GetService("CoreGui")
 local Workspace = game:GetService("Workspace")
-local RunService = game:GetService("RunService")
 
 local ChakraESPHandler = {}
 ChakraESPHandler.__index = ChakraESPHandler
@@ -12,15 +12,15 @@ ChakraESPHandler.__index = ChakraESPHandler
 local CONFIG = {
     COLOR = Color3.fromRGB(0, 255, 255), -- Cyan
     TEXT_SIZE = 12,
-    MAX_DISTANCE = 2000,
-    UPDATE_INTERVAL = 1.0 -- Scan every second
+    -- Full Map = Infinite Distance
+    MAX_DISTANCE = math.huge 
 }
 
 function ChakraESPHandler.new()
     local self = setmetatable({}, ChakraESPHandler)
     self.enabled = false
     self.billboards = {} -- [Model] = BillboardGui
-    self.connection = nil
+    self.connections = {}
     self.folder = Workspace:FindFirstChild("ChakraPoints")
     return self
 end
@@ -39,7 +39,7 @@ function ChakraESPHandler:CreateBillboard(model, pointName)
     if self.billboards[model] then return end
 
     local adorneePart = self:GetAdorneePart(model)
-    if not adorneePart then return end -- No part to attach to
+    if not adorneePart then return end 
 
     local bb = Instance.new("BillboardGui")
     bb.Name = "ChakraESP"
@@ -48,6 +48,8 @@ function ChakraESPHandler:CreateBillboard(model, pointName)
     bb.AlwaysOnTop = true
     bb.Parent = CoreGui
     bb.Adornee = adorneePart
+    -- Engine handles distance culling/rendering efficiently
+    bb.MaxDistance = CONFIG.MAX_DISTANCE 
 
     local lbl = Instance.new("TextLabel")
     lbl.Size = UDim2.new(1, 0, 1, 0)
@@ -59,7 +61,17 @@ function ChakraESPHandler:CreateBillboard(model, pointName)
     lbl.Text = string.format("[Chakra Point]\n%s", pointName)
     lbl.Parent = bb
 
-    self.billboards[model] = {gui = bb, label = lbl}
+    self.billboards[model] = bb
+end
+
+function ChakraESPHandler:CheckPoint(model)
+    if model:IsA("Model") and not self.billboards[model] then
+        local pointNameVal = model:FindFirstChild("PointName")
+        -- Only add if it has the PointName value
+        if pointNameVal and pointNameVal:IsA("StringValue") then
+            self:CreateBillboard(model, pointNameVal.Value)
+        end
+    end
 end
 
 function ChakraESPHandler:Scan()
@@ -69,67 +81,39 @@ function ChakraESPHandler:Scan()
         if not self.folder then return end
     end
 
-    for _, model in ipairs(self.folder:GetChildren()) do
-        if model:IsA("Model") and not self.billboards[model] then
-            local pointNameVal = model:FindFirstChild("PointName")
-            if pointNameVal and pointNameVal:IsA("StringValue") then
-                self:CreateBillboard(model, pointNameVal.Value)
-            end
+    -- Batch create to avoid initial stutter if folder is huge
+    task.spawn(function()
+        for _, model in ipairs(self.folder:GetChildren()) do
+            self:CheckPoint(model)
+            if self.enabled == false then break end -- Stop if disabled mid-scan
         end
-    end
-end
-
-function ChakraESPHandler:Update()
-    local camPos = Workspace.CurrentCamera.CFrame.Position
-
-    for model, data in pairs(self.billboards) do
-        if not model.Parent then
-            data.gui:Destroy()
-            self.billboards[model] = nil
-        else
-            local adornee = data.gui.Adornee
-            if adornee then
-                local dist = (adornee.Position - camPos).Magnitude
-                data.gui.Enabled = dist < CONFIG.MAX_DISTANCE
-            else
-                -- Try to re-find adornee if lost
-                local newAdornee = self:GetAdorneePart(model)
-                if newAdornee then
-                    data.gui.Adornee = newAdornee
-                else
-                    data.gui.Enabled = false
-                end
-            end
-        end
-    end
+    end)
 end
 
 function ChakraESPHandler:enable()
     if self.enabled then return end
     self.enabled = true
     
-    local lastScan = 0
-    self.connection = RunService.Heartbeat:Connect(function()
-        local now = tick()
-        if now - lastScan > CONFIG.UPDATE_INTERVAL then
-            self:Scan()
-            lastScan = now
-        end
-        self:Update()
-    end)
+    self:Scan()
     
-    self:Scan() -- Immediate scan
+    -- Listen for new points spawning (Event based = Zero overhead when idle)
+    if self.folder then
+        self.connections.ChildAdded = self.folder.ChildAdded:Connect(function(child)
+            task.wait() -- Wait for PointName to load
+            self:CheckPoint(child)
+        end)
+    end
 end
 
 function ChakraESPHandler:disable()
     self.enabled = false
-    if self.connection then
-        self.connection:Disconnect()
-        self.connection = nil
+    if self.connections.ChildAdded then
+        self.connections.ChildAdded:Disconnect()
+        self.connections.ChildAdded = nil
     end
 
-    for _, data in pairs(self.billboards) do
-        data.gui:Destroy()
+    for model, bb in pairs(self.billboards) do
+        bb:Destroy()
     end
     self.billboards = {}
 end

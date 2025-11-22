@@ -1,5 +1,6 @@
 -- PlayerESPHandler.lua (Bloodlines Specific)
 -- Handles ESP parenting to CoreGui and specific data paths
+-- OPTIMIZED: Throttled data fetching
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -15,12 +16,21 @@ function PlayerESPHandler.new()
     local self = setmetatable({}, PlayerESPHandler)
     self.enabled = false
     self.billboards = {}
+    self.dataCache = {} -- [Player] = {Weapon="...", IsObserving=bool, LastUpdate=tick}
     self.connections = {}
     self.maxDistance = 2000
     return self
 end
 
+-- Throttled Data Fetch (Heavy operation)
 function PlayerESPHandler:GetPlayerData(player)
+    local now = tick()
+    
+    -- Use cached data if less than 0.25s old (4 updates per second is plenty for weapon/skill changes)
+    if self.dataCache[player] and (now - self.dataCache[player].LastUpdate < 0.25) then
+        return self.dataCache[player].Weapon, self.dataCache[player].IsObserving
+    end
+
     local weapon = "None"
     local isObserving = false
     
@@ -40,6 +50,13 @@ function PlayerESPHandler:GetPlayerData(player)
             end
         end
     end
+    
+    -- Update Cache
+    self.dataCache[player] = {
+        Weapon = weapon,
+        IsObserving = isObserving,
+        LastUpdate = now
+    }
     
     return weapon, isObserving
 end
@@ -100,7 +117,7 @@ function PlayerESPHandler:Update()
             -- Update Adornee (Critical for CoreGui parenting)
             data.gui.Adornee = hrp
             
-            -- Data Fetch
+            -- Data Fetch (Throttled)
             local weapon, isObserving = self:GetPlayerData(player)
             local hp = hum and math.floor(hum.Health) or 0
             local maxHp = hum and math.floor(hum.MaxHealth) or 100
@@ -139,6 +156,7 @@ function PlayerESPHandler:enable()
             self.billboards[p].gui:Destroy()
             self.billboards[p] = nil
         end
+        self.dataCache[p] = nil
     end)
 end
 
@@ -151,6 +169,7 @@ function PlayerESPHandler:disable()
         b.gui:Destroy()
     end
     self.billboards = {}
+    self.dataCache = {}
 end
 
 return PlayerESPHandler

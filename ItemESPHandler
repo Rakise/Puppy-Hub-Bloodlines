@@ -1,7 +1,8 @@
 -- ItemESPHandler.lua
 -- Unified handler for Trinkets, Fruits, and Gems
--- Scans Workspace and ReplicatedStorage (for logic check, though mainly ESPs workspace objects)
--- Validates using "ID" and "ObjectValue" children
+-- OPTIMIZED: Uses GetChildren + ChildAdded
+-- FIXED: Fruit detection logic (No Attribute = Fruit)
+-- NEW: Support for ReplicatedStorage items via Proxy Parts
 
 local CoreGui = game:GetService("CoreGui")
 local Workspace = game:GetService("Workspace")
@@ -24,44 +25,77 @@ function ItemESPHandler.new()
         Fruit = false,
         Gem = false
     }
-    self.billboards = {} -- [Part] = {gui, type}
+    self.billboards = {} -- [Part] = {gui, type, proxyPart}
     self.maxDistance = 1000
-    self.connection = nil
+    self.connections = {}
     return self
 end
 
--- Determine Type based on user rules
+-- Determine Type based on STRICT user rules
 function ItemESPHandler:Identify(obj)
-    -- Validation: Must have "ID" and "ObjectValue"
+    -- Validation: Must have "ID" and "ObjectValue" children
     if not obj:FindFirstChild("ID") or not obj:FindFirstChild("ObjectValue") then
         return nil
     end
     
     local isMesh = obj:IsA("MeshPart")
-    local isModel = obj:IsA("Model")
     local name = obj.Name
     
-    -- Rule 1: Trinket (Attribute "RealName")
-    if obj:GetAttribute("RealName") then
-        return "Trinket", obj:GetAttribute("RealName")
+    -- LOGIC:
+    -- 1. If Attribute "RealName" exists -> TRINKET
+    -- 2. Else if Name contains "Gem" -> GEM
+    -- 3. Else (and is MeshPart) -> FRUIT
+    
+    local realNameAttr = obj:GetAttribute("RealName")
+    
+    if realNameAttr then
+        -- It has RealName, so it IS a Trinket
+        return "Trinket", realNameAttr
     end
     
-    -- Rule 2: Gem (MeshPart + Name contains "Gem")
+    -- No RealName attribute below this point
+    
     if isMesh and string.find(name, "Gem") then
         return "Gem", name
     end
     
-    -- Rule 3: Fruit (MeshPart + Not Trinket/Gem)
-    -- We already checked Trinket (attr) and Gem (name) above
     if isMesh then
+        -- No attribute, not a gem, must be a fruit
         return "Fruit", name
     end
     
     return nil -- Unknown
 end
 
+-- Helper to get CFrame safely
+function ItemESPHandler:GetCFrame(obj)
+    if obj:IsA("Model") then
+        return obj:GetPivot()
+    elseif obj:IsA("BasePart") then
+        return obj.CFrame
+    end
+    return CFrame.new()
+end
+
 function ItemESPHandler:CreateBillboard(part, typeStr, nameStr)
     if self.billboards[part] then return end
+    
+    local adornee = part
+    local proxyPart = nil
+    
+    -- If in ReplicatedStorage, create a fake part in Workspace for the billboard to stick to
+    if part:IsDescendantOf(ReplicatedStorage) then
+        proxyPart = Instance.new("Part")
+        proxyPart.Name = "ESP_Proxy"
+        proxyPart.Transparency = 1
+        proxyPart.CanCollide = false
+        proxyPart.Anchored = true
+        proxyPart.Size = Vector3.new(1, 1, 1)
+        proxyPart.CFrame = self:GetCFrame(part)
+        proxyPart.Parent = Workspace
+        
+        adornee = proxyPart
+    end
     
     local bb = Instance.new("BillboardGui")
     bb.Name = "ItemESP"
@@ -69,7 +103,7 @@ function ItemESPHandler:CreateBillboard(part, typeStr, nameStr)
     bb.StudsOffset = Vector3.new(0, 1, 0)
     bb.AlwaysOnTop = true
     bb.Parent = CoreGui
-    bb.Adornee = part
+    bb.Adornee = adornee
     
     local lbl = Instance.new("TextLabel")
     lbl.Size = UDim2.new(1, 0, 1, 0)
@@ -80,35 +114,39 @@ function ItemESPHandler:CreateBillboard(part, typeStr, nameStr)
     lbl.Text = string.format("%s (%s)", nameStr, typeStr)
     lbl.Parent = bb
     
-    self.billboards[part] = {gui = bb, type = typeStr}
+    self.billboards[part] = {
+        gui = bb, 
+        type = typeStr, 
+        proxyPart = proxyPart -- Store reference to destroy later
+    }
+end
+
+function ItemESPHandler:CheckObject(obj)
+    if not self.billboards[obj] and (obj:IsA("MeshPart") or obj:IsA("Model")) then
+        local typeStr, nameStr = self:Identify(obj)
+        if typeStr then
+            self:CreateBillboard(obj, typeStr, nameStr)
+        end
+    end
+end
+
+function ItemESPHandler:RemoveBillboard(obj)
+    local data = self.billboards[obj]
+    if data then
+        if data.gui then data.gui:Destroy() end
+        if data.proxyPart then data.proxyPart:Destroy() end
+        self.billboards[obj] = nil
+    end
 end
 
 function ItemESPHandler:Scan()
-    -- Only scan if at least one setting is on
-    if not (self.settings.Trinket or self.settings.Fruit or self.settings.Gem) then return end
-    
-    -- Scan Workspace descendants? Or Children?
-    -- User said "spawn in workspace with no organization". Likely direct children or shallow depth.
-    -- Descendants is expensive. Let's try Children first, maybe Descendants if simple.
-    -- Given "bad organization", Descendants might be needed, but limited depth is safer.
-    -- We'll scan GetDescendants but throttle it heavily or assume GetChildren.
-    -- Let's stick to GetChildren + 1 layer deep if it's a folder? 
-    -- Actually, `ReplicatedStorage.Apple` suggests they are Models/Parts.
-    
-    for _, obj in ipairs(Workspace:GetDescendants()) do
-        if (obj:IsA("MeshPart") or obj:IsA("Model")) and not self.billboards[obj] then
-             -- Optimization: Only check if it has children (ID/ObjectValue)
-             -- Is there a quick way? No.
-             -- Let's check identity
-             local typeStr, nameStr = self:Identify(obj)
-             
-             if typeStr then
-                 -- Check if we want this type
-                 if self.settings[typeStr] then
-                     self:CreateBillboard(obj, typeStr, nameStr)
-                 end
-             end
-        end
+    -- Scan Workspace
+    for _, obj in ipairs(Workspace:GetChildren()) do
+        self:CheckObject(obj)
+    end
+    -- Scan ReplicatedStorage
+    for _, obj in ipairs(ReplicatedStorage:GetChildren()) do
+        self:CheckObject(obj)
     end
 end
 
@@ -117,14 +155,14 @@ function ItemESPHandler:Update()
     
     for part, data in pairs(self.billboards) do
         if not part.Parent then
-            data.gui:Destroy()
-            self.billboards[part] = nil
+            self:RemoveBillboard(part)
         else
             local isEnabled = self.settings[data.type]
             
             if isEnabled then
-                local pos = part:IsA("Model") and (part.PrimaryPart and part.PrimaryPart.Position or part:GetPivot().Position) or part.Position
-                local dist = (pos - camPos).Magnitude
+                -- Use proxy position if available, otherwise part position
+                local targetCFrame = data.proxyPart and data.proxyPart.CFrame or self:GetCFrame(part)
+                local dist = (targetCFrame.Position - camPos).Magnitude
                 
                 if dist > self.maxDistance then
                     isEnabled = false
@@ -137,21 +175,52 @@ function ItemESPHandler:Update()
 end
 
 function ItemESPHandler:StartLoop()
-    if self.connection then return end
-    -- Slow scan (every 2 seconds), fast update (renderstep/heartbeat)
-    local lastScan = 0
-    self.connection = RunService.Heartbeat:Connect(function()
-        if tick() - lastScan > 2 then
-            self:Scan()
-            lastScan = tick()
-        end
+    if self.connections.Update then return end
+    
+    self:Scan()
+    
+    -- Workspace Listener
+    self.connections.WsChildAdded = Workspace.ChildAdded:Connect(function(child)
+        task.delay(0.5, function() if child.Parent then self:CheckObject(child) end end)
+    end)
+    self.connections.WsChildRemoved = Workspace.ChildRemoved:Connect(function(child)
+        self:RemoveBillboard(child)
+    end)
+    
+    -- ReplicatedStorage Listener
+    self.connections.RsChildAdded = ReplicatedStorage.ChildAdded:Connect(function(child)
+        task.delay(0.5, function() if child.Parent then self:CheckObject(child) end end)
+    end)
+    self.connections.RsChildRemoved = ReplicatedStorage.ChildRemoved:Connect(function(child)
+        self:RemoveBillboard(child)
+    end)
+    
+    self.connections.Update = RunService.Heartbeat:Connect(function()
         self:Update()
     end)
 end
 
+function ItemESPHandler:StopLoop()
+    if self.connections.WsChildAdded then self.connections.WsChildAdded:Disconnect() end
+    if self.connections.WsChildRemoved then self.connections.WsChildRemoved:Disconnect() end
+    if self.connections.RsChildAdded then self.connections.RsChildAdded:Disconnect() end
+    if self.connections.RsChildRemoved then self.connections.RsChildRemoved:Disconnect() end
+    if self.connections.Update then self.connections.Update:Disconnect() end
+    
+    self.connections = {}
+    
+    for part, _ in pairs(self.billboards) do
+        self:RemoveBillboard(part)
+    end
+end
+
 function ItemESPHandler:toggleCategory(cat, val)
     self.settings[cat] = val
-    self:StartLoop()
+    if self.settings.Trinket or self.settings.Fruit or self.settings.Gem then
+        self:StartLoop()
+    else
+        self:StopLoop()
+    end
 end
 
 function ItemESPHandler:setMaxDistance(val)

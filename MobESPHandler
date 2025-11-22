@@ -1,5 +1,6 @@
 -- MobESPHandler.lua (Bloodlines Specific)
 -- Handles NPC (Dialog) and Mob (Combat) ESP
+-- OPTIMIZED: Event-based scanning
 
 local CoreGui = game:GetService("CoreGui")
 local RunService = game:GetService("RunService")
@@ -20,7 +21,7 @@ function MobESPHandler.new()
     self.showNPCs = false
     self.maxDistance = 1000
     self.billboards = {} -- [Model] = BillboardGui
-    self.connection = nil
+    self.connections = {}
     return self
 end
 
@@ -50,23 +51,25 @@ function MobESPHandler:CreateBillboard(model, typeStr)
     self.billboards[model] = {gui = bb, type = typeStr, lbl = lbl}
 end
 
-function MobESPHandler:Scan()
-    if not self.showMobs and not self.showNPCs then return end
-    
-    for _, model in ipairs(Workspace:GetChildren()) do
-        if model:IsA("Model") and model:FindFirstChild("Humanoid") and not self.billboards[model] then
-            -- Check for "NPC" StringValue
-            local npcVal = model:FindFirstChild("NPC")
-            if npcVal and npcVal:IsA("StringValue") then
-                local val = npcVal.Value
-                
-                if val == "Dialog" and self.showNPCs then
-                    self:CreateBillboard(model, "NPC")
-                elseif val == "Combat" and self.showMobs then
-                    self:CreateBillboard(model, "MOB")
-                end
+function MobESPHandler:CheckMob(model)
+    if model:IsA("Model") and model:FindFirstChild("Humanoid") and not self.billboards[model] then
+        -- Check for "NPC" StringValue
+        local npcVal = model:FindFirstChild("NPC")
+        if npcVal and npcVal:IsA("StringValue") then
+            local val = npcVal.Value
+            
+            if val == "Dialog" then
+                self:CreateBillboard(model, "NPC")
+            elseif val == "Combat" then
+                self:CreateBillboard(model, "MOB")
             end
         end
+    end
+end
+
+function MobESPHandler:Scan()
+    for _, model in ipairs(Workspace:GetChildren()) do
+        self:CheckMob(model)
     end
 end
 
@@ -107,21 +110,37 @@ function MobESPHandler:Update()
 end
 
 function MobESPHandler:StartLoop()
-    if self.connection then return end
-    self.connection = RunService.Heartbeat:Connect(function()
-        if tick() % 1 < 0.1 then self:Scan() end -- Scan less frequently
+    if self.connections.Update then return end
+    
+    self:Scan()
+    
+    self.connections.ChildAdded = Workspace.ChildAdded:Connect(function(child)
+        task.wait() -- Wait for NPC value to replicate
+        self:CheckMob(child)
+    end)
+    
+    self.connections.Update = RunService.Heartbeat:Connect(function()
         self:Update()
     end)
 end
 
+function MobESPHandler:StopLoop()
+    if self.connections.ChildAdded then self.connections.ChildAdded:Disconnect() self.connections.ChildAdded = nil end
+    if self.connections.Update then self.connections.Update:Disconnect() self.connections.Update = nil end
+    
+    for _, data in pairs(self.billboards) do
+        data.gui.Enabled = false
+    end
+end
+
 function MobESPHandler:toggleMobs(val)
     self.showMobs = val
-    self:StartLoop()
+    if self.showMobs or self.showNPCs then self:StartLoop() else self:StopLoop() end
 end
 
 function MobESPHandler:toggleNPCs(val)
     self.showNPCs = val
-    self:StartLoop()
+    if self.showMobs or self.showNPCs then self:StartLoop() else self:StopLoop() end
 end
 
 function MobESPHandler:setMaxDistance(val)
