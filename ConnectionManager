@@ -1,0 +1,65 @@
+-- ConnectionManager.lua
+-- Utilitário para gerenciar RBXScriptConnections de forma segura e centralizada
+
+local ConnectionManager = {}
+ConnectionManager.__index = ConnectionManager
+
+-- Cria uma nova instância do ConnectionManager
+function ConnectionManager.new()
+    return setmetatable({ _conns = {} }, ConnectionManager)
+end
+
+-- Conecta um sinal a uma função e adiciona a conexão ao manager
+-- @param signal O sinal (evento) a ser conectado
+-- @param callback A função a ser chamada quando o evento for disparado
+-- @return A conexão criada
+function ConnectionManager:connect(signal, callback)
+    local conn = signal:Connect(callback)
+    self:add(conn)
+    return conn
+end
+
+-- Adiciona uma conexão existente ao manager
+-- @param conn A conexão a ser adicionada (deve ser uma RBXScriptConnection)
+function ConnectionManager:add(conn)
+    if typeof(conn) ~= "RBXScriptConnection" then
+        warn("Tentativa de adicionar um objeto que não é uma RBXScriptConnection")
+        return
+    end
+    if not self._conns[conn] then
+        self._conns[conn] = true
+    end
+end
+
+-- Remove e desconecta uma conexão específica
+-- @param conn A conexão a ser removida
+function ConnectionManager:remove(conn)
+    if self._conns[conn] then
+        if conn.Connected then
+            conn:Disconnect()
+        end
+        self._conns[conn] = nil
+    end
+end
+
+-- Desconecta todas as conexões e limpa a lista
+function ConnectionManager:disconnectAll()
+    for conn, _ in pairs(self._conns) do
+        if conn.Connected then
+            conn:Disconnect()
+        end
+    end
+    self._conns = {}
+end
+
+-- Conta o número de conexões gerenciadas
+-- @return O número de conexões ativas
+function ConnectionManager:count()
+    local count = 0
+    for _ in pairs(self._conns) do
+        count = count + 1
+    end
+    return count
+end
+
+return ConnectionManager

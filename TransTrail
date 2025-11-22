@@ -1,0 +1,152 @@
+-- TransTrail Module based on PuppyAdmin logic
+local Players = game:GetService("Players")
+local Debris = game:GetService("Debris")
+
+local TransTrail = {}
+TransTrail.__index = TransTrail
+
+function TransTrail.new()
+    local self = setmetatable({}, TransTrail)
+    self.enabled = false
+    self.currentTransTrail = nil
+    self._connections = {}
+    return self
+end
+
+-- Helper: Safecall wrapper
+local function safeCall(func, ...)
+	local success, result = pcall(func, ...)
+	if not success then
+		local trace = debug.traceback()
+		warn("TransTrail Error:", result, "\nStack Trace:\n" .. trace)
+	end
+	return success, result
+end
+
+-- Remove Trail Logic
+function TransTrail:_removeTransTrail()
+	safeCall(function()
+        local player = Players.LocalPlayer
+        local character = player and player.Character
+        
+		if self.currentTransTrail and self.currentTransTrail.Parent then
+			self.currentTransTrail:Destroy()
+		end
+		-- Also try finding by name in case reference was lost
+		local existingTrailR6 = character and character:FindFirstChild("Torso", true) and character.Torso:FindFirstChild("TransPrideTrail")
+		if existingTrailR6 then existingTrailR6:Destroy() end
+		local existingTrailR15 = character and character:FindFirstChild("UpperTorso", true) and character.UpperTorso:FindFirstChild("TransPrideTrail")
+		if existingTrailR15 then existingTrailR15:Destroy() end
+		
+		self.currentTransTrail = nil
+	end)
+end
+
+-- Create Trail Logic
+function TransTrail:_createTransTrail(char)
+	safeCall(function()
+		self:_removeTransTrail() -- Remove existing trail first
+
+		local torso = char:FindFirstChild("Torso") or char:FindFirstChild("UpperTorso") 
+		if not torso then warn("Torso/UpperTorso not found for Trans Trail"); return end
+
+		-- Find or create suitable attachments
+		local attach0 = torso:FindFirstChild("WaistCenterAttachment") 
+			or torso:FindFirstChild("BodyBackAttachment") 
+			or Instance.new("Attachment", torso)
+		attach0.Name = "TransTrailAttach0" -- Give unique name
+		
+		local attach1 = torso:FindFirstChild("NeckAttachment") 
+			or torso:FindFirstChild("BodyFrontAttachment") 
+			or Instance.new("Attachment", torso)
+		attach1.Name = "TransTrailAttach1"
+		attach1.Position = Vector3.new(0, 1, 0) -- Adjust neck position if needed
+
+		local trail = Instance.new("Trail")
+		trail.Name = "TransPrideTrail"
+		trail.Attachment0 = attach0
+		trail.Attachment1 = attach1
+		trail.Enabled = true
+		trail.FaceCamera = false
+		trail.Lifetime = 0.3
+		trail.LightEmission = 0.2 
+		trail.LightInfluence = 0
+		trail.MaxLength = 5 
+		trail.MinLength = 0
+		trail.Texture = "rbxassetid://3278944851" 
+		trail.TextureLength = 1
+		trail.TextureMode = Enum.TextureMode.Stretch
+		trail.Transparency = NumberSequence.new({
+			NumberSequenceKeypoint.new(0, 0.2), 
+			NumberSequenceKeypoint.new(0.5, 0.5),
+			NumberSequenceKeypoint.new(1, 0.8) 
+		})
+        -- Define the Transgender flag colors
+        local lightBlue = Color3.fromRGB(91, 206, 250)
+        local lightPink = Color3.fromRGB(245, 169, 184)
+        local white = Color3.fromRGB(255, 255, 255)
+        
+        trail.Color = ColorSequence.new({
+            ColorSequenceKeypoint.new(0.0, lightBlue),
+            ColorSequenceKeypoint.new(0.2, lightBlue),
+            ColorSequenceKeypoint.new(0.25, lightPink),
+            ColorSequenceKeypoint.new(0.45, lightPink),
+            ColorSequenceKeypoint.new(0.5, white),
+            ColorSequenceKeypoint.new(0.55, lightPink),
+            ColorSequenceKeypoint.new(0.75, lightPink),
+            ColorSequenceKeypoint.new(0.8, lightBlue),
+            ColorSequenceKeypoint.new(1.0, lightBlue)
+        })
+		trail.Parent = torso -- Parent to torso
+
+		self.currentTransTrail = trail
+	end)
+end
+
+-- Enable/Disable Logic
+function TransTrail:enable()
+    if self.enabled then return end
+    self.enabled = true
+    
+    local player = Players.LocalPlayer
+    local char = player and player.Character
+
+    -- Create trail on current character if exists
+    if char then
+        self:_createTransTrail(char)
+    end
+
+    -- Listen for character respawn
+    self._connections.CharacterAdded = player.CharacterAdded:Connect(function(newChar)
+        if self.enabled then -- Only create if still enabled
+            -- NEW: Wait for character to load
+            task.wait(0.5) 
+            if newChar.Parent then -- Check if character is still valid
+                self:_createTransTrail(newChar)
+            end
+        end
+    end)
+    -- Listen for character removal (just in case destroy fails)
+    self._connections.CharacterRemoving = player.CharacterRemoving:Connect(function(oldChar)
+         self:_removeTransTrail() -- Ensure cleanup
+    end)
+end
+
+function TransTrail:disable()
+    if not self.enabled then return end
+    self.enabled = false
+    self:_removeTransTrail()
+
+    -- Disconnect listeners
+    if self._connections.CharacterAdded then self._connections.CharacterAdded:Disconnect(); self._connections.CharacterAdded = nil end
+    if self._connections.CharacterRemoving then self._connections.CharacterRemoving:Disconnect(); self._connections.CharacterRemoving = nil end
+
+end
+
+-- Cleanup
+function TransTrail:destroy()
+    self:disable()
+    self._connections = {}
+end
+
+return TransTrail

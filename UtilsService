@@ -1,0 +1,137 @@
+-- UtilsService Module
+-- Main utility service that orchestrates all utility modules
+-- Usage: local Utils = require(path); local utils = Utils.new(); utils:getPlayerData(player)
+
+-- Load sub-modules using loadstring
+local PlayerData = loadstring(game:HttpGet("https://raw.githubusercontent.com/Rakise/Puppy-Hub/refs/heads/main/Utils/PlayerData"))()
+-- local ForceField = loadstring(game:HttpGet("https://raw.githubusercontent.com/Rakise/Puppy-Hub/refs/heads/main/Utils/ForceField"))()
+local ToolManager = loadstring(game:HttpGet("https://raw.githubusercontent.com/Rakise/Puppy-Hub/refs/heads/main/Utils/ToolManager"))()
+local BillboardUtils = loadstring(game:HttpGet("https://raw.githubusercontent.com/Rakise/Puppy-Hub/refs/heads/main/Utils/BillboardUtils"))()
+
+local UtilsService = {}
+UtilsService.__index = UtilsService
+
+--// Function: UtilsService.new
+--// Description: Creates a new UtilsService instance with all sub-modules.
+function UtilsService.new()
+    local self = setmetatable({}, UtilsService)
+    
+    -- Initialize sub-modules
+    self.playerData = PlayerData.new()
+    -- self.forceField = ForceField.new()
+    self.toolManager = ToolManager.new()
+    self.billboardUtils = BillboardUtils.new()
+    
+    return self
+end
+
+--// PlayerData Delegation Methods
+function UtilsService:getPlayerBasicData(player)
+    return self.playerData:getBasicData(player)
+end
+
+function UtilsService:getPlayerRogueData(player)
+    return self.playerData:getRogueData(player)
+end
+
+function UtilsService:getPlayerEdictData(player)
+    return self.playerData:getEdictData(player)
+end
+
+function UtilsService:getPlayerPrestigeData(player)
+    return self.playerData:getPrestigeData(player)
+end
+
+function UtilsService:getPlayerHealthData(player)
+    return self.playerData:getHealthData(player)
+end
+
+function UtilsService:getPlayerFullData(player)
+    return self.playerData:getFullData(player)
+end
+
+function UtilsService:getPlayerRogueDisplay(player)
+    return self.playerData:getRogueDisplay(player)
+end
+
+function UtilsService:getPlayerEdictDisplay(player)
+    return self.playerData:getEdictDisplay(player)
+end
+
+function UtilsService:getPlayerHealthDisplay(player)
+    return self.playerData:getHealthDisplay(player)
+end
+
+--// ForceField Delegation Methods
+-- function UtilsService:hasForceField(player)
+--     return self.forceField:hasForceField(player)
+-- end
+-- 
+-- function UtilsService:getForceFieldTimeLeft(player)
+--     return self.forceField:getTimeLeft(player)
+-- end
+-- 
+-- function UtilsService:getForceFieldColor(timeLeft)
+--     return self.forceField:getColor(timeLeft)
+-- end
+-- 
+-- function UtilsService:getForceFieldData(player)
+--     return self.forceField:getData(player)
+-- end
+-- 
+-- function UtilsService:getForceFieldStatus(player)
+--     return self.forceField:getStatus(player)
+-- end
+-- 
+-- function UtilsService:isForceFieldActive(player)
+--     return self.forceField:isActive(player)
+-- end
+-- 
+-- function UtilsService:getForceFieldTimeRemaining(player)
+--     return self.forceField:getTimeRemaining(player)
+-- end
+
+--// ToolManager Delegation Methods
+function UtilsService:getPlayerTools(player)
+    return self.toolManager:getPlayerTools(player)
+end
+
+function UtilsService:getToolDetails(tool)
+    return self.toolManager:getToolDetails(tool)
+end
+
+function UtilsService:getEquippedTool(player)
+    local character = player and player.Character
+    if not character then return nil end
+    return character:FindFirstChildOfClass("Tool")
+end
+
+function UtilsService:getToolCount(player)
+    local tools = self.toolManager:getPlayerTools(player)
+    return #tools
+end
+
+--// Backward Compatibility Methods (for existing code)
+function UtilsService:getPlayerData(player)
+    return self:getPlayerFullData(player)
+end
+
+--// Billboard/Frame/Label Utility Methods
+function UtilsService:createBillboard(parent, adornee, size, name)
+    return self.billboardUtils:createBillboard(parent, adornee, size, name)
+end
+
+function UtilsService:createFrameWithLayout(parent, frameName, layoutConfig)
+    return self.billboardUtils:createFrameWithLayout(parent, frameName, layoutConfig)
+end
+
+function UtilsService:createLabel(parent, text)
+    return self.billboardUtils:createLabel(parent, text)
+end
+
+function UtilsService:createUIListLayout(parent, layoutConfig)
+    return self.billboardUtils:createUIListLayout(parent, layoutConfig)
+end
+
+--// Main Export
+return UtilsService

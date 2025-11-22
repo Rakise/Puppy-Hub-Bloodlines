@@ -57,7 +57,6 @@ local ChakraESPHandler = safeRequire(BRAZIL_HUB_BASE_URL .. "ChakraESPHandler") 
 local TransTrail = safeRequire(BRAZIL_HUB_BASE_URL .. "TransTrail")
 
 -- Standard Modules
-local AutoAim = safeRequire(BRAZIL_HUB_BASE_URL .. "Auto-Aim")
 local NoFog = safeRequire(BRAZIL_HUB_BASE_URL .. "NoFog")
 
 -- Global State
