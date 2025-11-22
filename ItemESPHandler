@@ -1,7 +1,6 @@
 -- ItemESPHandler.lua
 -- Unified handler for Trinkets, Fruits, and Gems
--- FIX: Workspace ONLY (Removed ReplicatedStorage/Proxy logic)
--- FIX: Fruit prioritization (Banana detected as fruit even if it has attributes)
+-- FIX: Infinite Distance
 
 local CoreGui = game:GetService("CoreGui")
 local Workspace = game:GetService("Workspace")
@@ -18,7 +17,7 @@ local COLORS = {
 }
 
 -- Config
-local RENDER_DISTANCE = 2000
+local RENDER_DISTANCE = math.huge -- Infinite
 local PROCESS_RATE = 25 
 local FAKE_POS = Vector3.new(1927.698, -125.871506, -1212.71704)
 
@@ -140,23 +139,16 @@ end
 
 function ItemESPHandler:RenderLoop()
     if not self.localPlayer.Character then return end
-    local root = self.localPlayer.Character:FindFirstChild("HumanoidRootPart")
-    if not root then return end
     
-    local myPos = root.Position
     local processed = 0
     
     for obj, data in pairs(self.validItems) do
         if not obj.Parent then
             self:OnItemRemoved(obj)
         else
+            -- Always render if type enabled (removed distance check)
             if self.settings[data.Type] then
-                local pos = self:GetCFrame(obj).Position
-                if (pos - myPos).Magnitude <= RENDER_DISTANCE then
-                    if not data.Billboard then self:CreateVisuals(obj, data) end
-                else
-                    if data.Billboard then self:DestroyVisuals(data) end
-                end
+                if not data.Billboard then self:CreateVisuals(obj, data) end
             else
                 if data.Billboard then self:DestroyVisuals(data) end
             end
@@ -197,7 +189,7 @@ function ItemESPHandler:toggleCategory(cat, val)
 end
 
 function ItemESPHandler:setMaxDistance(val)
-    RENDER_DISTANCE = val
+    RENDER_DISTANCE = math.huge
 end
 
 return ItemESPHandler

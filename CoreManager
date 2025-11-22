@@ -72,7 +72,8 @@ local State = {
     CFrameSpeedValue = 1,
     
     -- Internal
-    IsPanicMode = false -- True if Chakra Sense is active on ANY player
+    PanicModeOption = true, -- User toggle preference
+    IsPanicMode = false     -- Actual runtime state
 }
 
 local SETTINGS_FOLDER = ReplicatedStorage:WaitForChild("Settings", 10)
@@ -103,6 +104,12 @@ local Tabs = {
 
 -- 1. Panic Check (Chakra Sense - Global Check)
 local function checkPanicMode()
+    -- If the user disabled the panic mode feature, skip checks
+    if not State.PanicModeOption then 
+        State.IsPanicMode = false
+        return 
+    end
+
     local found = false
     
     -- Iterate through ALL players, not just LocalPlayer
@@ -268,6 +275,14 @@ MoveGroup:AddSlider('WalkSpeedSlider', {
     Callback = function(val) State.WalkSpeed = val end
 })
 
+-- Panic Mode Toggle
+MoveGroup:AddToggle('PanicModeToggle', {
+    Text = 'Auto Panic (Chakra Sense)',
+    Default = true,
+    Tooltip = 'Disables movement hacks when someone uses Chakra Sense.',
+    Callback = function(val) State.PanicModeOption = val end
+})
+
 -- JumpPower
 MoveGroup:AddToggle('JumpPowerToggle', {
     Text = 'Enable JumpPower',
@@ -391,13 +406,7 @@ ItemGroup:AddToggle('ChakraESP', {
     Text = 'Chakra Point ESP', Default = false,
     Callback = function(val) if ChakraESPHandler then if val then ChakraESPHandler:enable() else ChakraESPHandler:disable() end end end
 })
-ItemGroup:AddSlider('ESPDistance', {
-    Text = 'ESP Distance', Default = 1000, Min = 100, Max = 5000, Rounding = 0,
-    Callback = function(val)
-        if ItemESPHandler then ItemESPHandler:setMaxDistance(val) end
-        if MobESPHandler then MobESPHandler:setMaxDistance(val) end
-    end
-})
+-- Removed Max Distance Slider
 
 MiscGroup:AddToggle('TransTrailToggle', {
     Text = 'Trans Flag Trail', Default = false,

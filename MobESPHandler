@@ -1,6 +1,6 @@
 -- MobESPHandler.lua (Bloodlines Specific)
 -- Handles NPC (Dialog) and Mob (Combat) ESP
--- OPTIMIZED: Event-based scanning
+-- OPTIMIZED: Event-based scanning with Dynamic Sizing
 
 local CoreGui = game:GetService("CoreGui")
 local RunService = game:GetService("RunService")
@@ -19,7 +19,7 @@ function MobESPHandler.new()
     local self = setmetatable({}, MobESPHandler)
     self.showMobs = false
     self.showNPCs = false
-    self.maxDistance = 1000
+    self.maxDistance = math.huge -- Default Infinite
     self.billboards = {} -- [Model] = BillboardGui
     self.connections = {}
     return self
@@ -30,10 +30,18 @@ function MobESPHandler:CreateBillboard(model, typeStr)
     
     local color = (typeStr == "NPC") and COLORS.NPC or COLORS.MOB
     
+    -- Dynamic Scaling Calculation
+    local height = 5 -- Default
+    local extents = model:GetExtentsSize()
+    if extents.Y > 1 then
+        height = extents.Y
+    end
+
     local bb = Instance.new("BillboardGui")
     bb.Name = "MobESP"
-    bb.Size = UDim2.new(0, 100, 0, 40)
-    bb.StudsOffset = Vector3.new(0, 3, 0)
+    -- Scale Billboard Size based on Model Height
+    bb.Size = UDim2.new(0, 100 + (height * 2), 0, 40 + height)
+    bb.StudsOffset = Vector3.new(0, height + 2, 0)
     bb.AlwaysOnTop = true
     bb.Parent = CoreGui
     bb.Adornee = model:FindFirstChild("HumanoidRootPart") or model.PrimaryPart
@@ -42,9 +50,10 @@ function MobESPHandler:CreateBillboard(model, typeStr)
     lbl.Size = UDim2.new(1, 0, 1, 0)
     lbl.BackgroundTransparency = 1
     lbl.TextColor3 = color
-    lbl.TextStrokeTransparency = 0.5
+    lbl.TextStrokeTransparency = 0.3
     lbl.Font = Enum.Font.SourceSansBold
-    lbl.TextSize = 12
+    -- Scale Text Size slightly for huge mobs
+    lbl.TextSize = math.clamp(14 + (height * 0.5), 12, 24)
     lbl.Text = model.Name
     lbl.Parent = bb
     
@@ -86,19 +95,28 @@ function MobESPHandler:Update()
             if data.type == "NPC" and self.showNPCs then isVisible = true end
             if data.type == "MOB" and self.showMobs then isVisible = true end
             
-            -- Distance Check
             if isVisible then
                 local part = data.gui.Adornee
                 if part then
                     local dist = (part.Position - camPos).Magnitude
-                    if dist > self.maxDistance then isVisible = false end
                     
                     -- Update Text with Distance/HP
-                    if isVisible then
-                        local hum = model:FindFirstChild("Humanoid")
-                        local hp = hum and math.floor(hum.Health) or 0
-                        data.lbl.Text = string.format("%s\n[%dm] HP: %d", model.Name, dist, hp)
-                    end
+                    local hum = model:FindFirstChild("Humanoid")
+                    local hp = hum and math.floor(hum.Health) or 0
+                    local maxHp = hum and math.floor(hum.MaxHealth) or 100
+                    
+                    -- Name matches type color, HP is white for readability against red mobs
+                    local nameColorHex = data.type == "MOB" and "#FF3232" or "#FFFF00"
+                    
+                    data.lbl.Text = string.format(
+                        "<font color='%s'>%s</font>\n<font color='#FFFFFF'>[%dm] HP: %d/%d</font>", 
+                        nameColorHex, 
+                        model.Name, 
+                        dist, 
+                        hp,
+                        maxHp
+                    )
+                    data.lbl.RichText = true
                 else
                     isVisible = false
                 end
@@ -115,8 +133,15 @@ function MobESPHandler:StartLoop()
     self:Scan()
     
     self.connections.ChildAdded = Workspace.ChildAdded:Connect(function(child)
-        task.wait() -- Wait for NPC value to replicate
+        task.wait(0.1) -- Wait briefly for NPC value to replicate
         self:CheckMob(child)
+    end)
+    
+    -- Periodic Rescan (Fixes streaming issues or missing mobs)
+    self.connections.Rescan = RunService.Heartbeat:Connect(function()
+        if tick() % 2 < 0.1 then -- Runs roughly every 2 seconds
+             self:Scan()
+        end
     end)
     
     self.connections.Update = RunService.Heartbeat:Connect(function()
@@ -127,6 +152,7 @@ end
 function MobESPHandler:StopLoop()
     if self.connections.ChildAdded then self.connections.ChildAdded:Disconnect() self.connections.ChildAdded = nil end
     if self.connections.Update then self.connections.Update:Disconnect() self.connections.Update = nil end
+    if self.connections.Rescan then self.connections.Rescan:Disconnect() self.connections.Rescan = nil end
     
     for _, data in pairs(self.billboards) do
         data.gui.Enabled = false
@@ -144,7 +170,7 @@ function MobESPHandler:toggleNPCs(val)
 end
 
 function MobESPHandler:setMaxDistance(val)
-    self.maxDistance = val
+    self.maxDistance = math.huge -- Always infinite now
 end
 
 return MobESPHandler

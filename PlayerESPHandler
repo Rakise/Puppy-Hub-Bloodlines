@@ -1,6 +1,5 @@
 -- PlayerESPHandler.lua
--- FIX: Increased Size and Visibility (Anti-Gank)
--- FIX: Throttled Data Fetch
+-- FIX: Infinite Distance
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -18,7 +17,7 @@ function PlayerESPHandler.new()
     self.billboards = {}
     self.dataCache = {} 
     self.connections = {}
-    self.maxDistance = 4000 -- Increased default distance
+    self.maxDistance = math.huge -- Infinite
     return self
 end
 
@@ -114,7 +113,7 @@ function PlayerESPHandler:Update()
             data.infoLbl.TextColor3 = color
             data.infoLbl.Text = string.format("HP: %d/%d\nWep: %s", hp, maxHp, weapon)
             
-            data.gui.Enabled = dist < self.maxDistance
+            data.gui.Enabled = true -- Always true, no distance limit
         else
             if self.billboards[player] then
                 self.billboards[player].gui.Adornee = nil
