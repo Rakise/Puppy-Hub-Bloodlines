@@ -1,0 +1,70 @@
+-- NoFog.lua
+-- Simple module to remove fog based on user-provided loop logic
+
+local Lighting = game:GetService("Lighting")
+local RunService = game:GetService("RunService")
+
+local NoFog = {}
+NoFog.__index = NoFog
+
+function NoFog.new()
+    local self = setmetatable({}, NoFog)
+    self.enabled = false
+    self.loopConnection = nil
+    
+    -- Store original values to restore
+    self.originalFogEnd = Lighting.FogEnd
+    self.originalFogStart = Lighting.FogStart
+    
+    return self
+end
+
+function NoFog:enable()
+    if self.enabled then return end
+    self.enabled = true
+    
+    -- Stop any existing loop
+    if self.loopConnection then
+        self.loopConnection:Disconnect()
+        self.loopConnection = nil
+    end
+    
+    print("[NoFog] Enabled. Loop started.")
+    -- Start the new loop
+    self.loopConnection = RunService.Heartbeat:Connect(function()
+        -- Use pcall for safety in case Lighting service is not available
+        pcall(function()
+            if Lighting.FogEnd ~= 100000 then
+                Lighting.FogEnd = 100000
+            end
+            if Lighting.FogStart ~= 99999 then
+                Lighting.FogStart = 99999
+            end
+        end)
+    end)
+end
+
+function NoFog:disable()
+    if not self.enabled then return end
+    self.enabled = false
+    
+    -- Stop the loop
+    if self.loopConnection then
+        self.loopConnection:Disconnect()
+        self.loopConnection = nil
+    end
+    
+    -- Restore original fog settings
+    pcall(function()
+        Lighting.FogEnd = self.originalFogEnd
+        Lighting.FogStart = self.originalFogStart
+    end)
+    
+    print("[NoFog] Disabled. Original fog restored.")
+end
+
+function NoFog:destroy()
+    self:disable()
+end
+
+return NoFog
