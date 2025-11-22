@@ -403,82 +403,144 @@ MiscGroup:AddToggle('NoFogToggle', {
 
 
 -- ============================================================================
--- NATIVE SERVER BROWSER (Integrated using Library.lua components)
+-- API SERVER BROWSER (Replaces old ReplicatedStorage browser)
 -- ============================================================================
-local ServerGroup = Tabs.Servers:AddLeftGroupbox('Server Browser')
-ServerGroup:AddLabel('Game ID: 10266164381')
+local ServerGroup = Tabs.Servers:AddLeftGroupbox('Server Browser (API)')
+local GAME_ID = 10266164381 -- Bloodlines Place ID
 
+-- Bloodlines specific join logic
 local function joinServer(id)
+    -- 'id' here corresponds to the JobId from the API
     local events = ReplicatedStorage:FindFirstChild("Events")
     local dataEvent = events and events:FindFirstChild("DataEvent")
     if dataEvent then
+        print("[PuppyHub] Teleporting to server:", id)
         dataEvent:FireServer("ServerTeleport", id, 14)
+    else
+        warn("[PuppyHub] Could not find DataEvent for teleport!")
     end
 end
 
-local function refreshServers()
-    -- Note: Library doesn't have a "Clear" function for groupboxes easily accessible.
-    -- We will rebuild the list by finding and destroying buttons manually.
-    -- NOTE: This assumes the buttons are children of the Scrollbox created by AddLeftGroupbox.
-    -- LinoriaLib structure: Groupbox -> Container (Frame).
+-- UI Elements for Status
+local StatusLabel = ServerGroup:AddLabel("Click 'Refresh' to load servers.")
+
+-- Create a Scrollbox (manually managed for button clearing)
+local serverScroll = Library:Create('ScrollingFrame', {
+    Name = "ServerListScroll",
+    Size = UDim2.new(1, -4, 0, 400),
+    ZIndex = 6,
+    Parent = ServerGroup.Container,
+    BackgroundColor3 = Library.BackgroundColor,
+    BorderColor3 = Library.OutlineColor,
+    BorderMode = Enum.BorderMode.Inset,
+    ScrollBarThickness = 6,
+    ScrollBarImageColor3 = Library.AccentColor,
+})
+
+Library:Create('UIListLayout', {
+    Padding = UDim.new(0, 5),
+    FillDirection = Enum.FillDirection.Vertical,
+    SortOrder = Enum.SortOrder.LayoutOrder,
+    HorizontalAlignment = Enum.HorizontalAlignment.Center,
+    Parent = serverScroll,
+})
+
+local isFetching = false
+
+local function fetchServers()
+    if isFetching then return end
+    isFetching = true
+    StatusLabel:SetText("Fetching via API...")
     
-    local container = ServerGroup.Container
-    for _, child in pairs(container:GetChildren()) do
-        if child:IsA("Frame") and child:FindFirstChild("TextLabel") and child.Name == "ServerButton" then
-            child:Destroy()
-        end
+    -- Clear existing buttons in the scroll frame
+    for _, child in ipairs(serverScroll:GetChildren()) do
+        if child:IsA("TextButton") then child:Destroy() end
     end
     
-    local serversFolder = ReplicatedStorage:FindFirstChild("Servers")
-    if not serversFolder then return end
-    
-    local sortedServers = {}
-    for _, val in ipairs(serversFolder:GetChildren()) do
-        if val:IsA("StringValue") then
-            table.insert(sortedServers, val)
-        end
-    end
-    
-    -- Sort by player count desc
-    table.sort(sortedServers, function(a, b)
-        local splitA = string.split(a.Value, ' ')
-        local splitB = string.split(b.Value, ' ')
-        local countA = tonumber(splitA[2]) or 0
-        local countB = tonumber(splitB[2]) or 0
-        return countA > countB
-    end)
-    
-    for _, serverVal in ipairs(sortedServers) do
-        local raw = serverVal.Value
-        local split = string.split(raw, ' ')
-        local sId = split[1]
-        local count = split[2] or "?"
-        local sName = serverVal.Name
-        local region = serverVal:FindFirstChild("Region") and serverVal.Region.Value or "Unknown"
-        local isCurrent = serverVal:FindFirstChild("Current") ~= nil
-        
-        local text = string.format(" %s | %s | %s/20", sName, region, count)
-        if isCurrent then text = " [Current] " .. text end
-        
-        -- Use Library:AddButton logic but manually to ensure it's added to the scrollable area
-        local btn = ServerGroup:AddButton(text, function()
-            if not isCurrent then joinServer(sId) end
+    task.spawn(function()
+        local success, response = pcall(function()
+            -- HTTP Get Wrapper
+            local requestFunc = (syn and syn.request) or (http and http.request) or http_request or (fluxus and fluxus.request) or request
+            local url = string.format(
+                "https://roproxy-production-0200.up.railway.app/games/v1/games/%d/servers/0?sortOrder=2&excludeFullGames=false&limit=100",
+                GAME_ID
+            )
+            
+            if requestFunc then
+                local res = requestFunc({Url = url, Method = "GET"})
+                return res.Body
+            else
+                return game:HttpGet(url)
+            end
         end)
         
-        -- Mark for deletion on refresh
-        btn.Outer.Name = "ServerButton" 
+        isFetching = false
         
-        if isCurrent then
-            -- Visual indicator for current server
-            btn.Outer.BackgroundColor3 = Color3.fromRGB(60, 80, 60)
+        if not success or not response then
+            StatusLabel:SetText("Failed to fetch servers.")
+            return
         end
-    end
+        
+        local jsonSuccess, data = pcall(HttpService.JSONDecode, HttpService, response)
+        if not jsonSuccess or not data or not data.data then
+            StatusLabel:SetText("Failed to parse API data.")
+            return
+        end
+        
+        local servers = data.data
+        
+        -- Sort servers by player count (descending)
+        table.sort(servers, function(a, b)
+            return a.playing > b.playing
+        end)
+        
+        StatusLabel:SetText(string.format("Loaded %d servers.", #servers))
+        
+        for _, server in ipairs(servers) do
+            local text = string.format(
+                "Players: %d/%d | FPS: %.0f | Ping: %d",
+                server.playing,
+                server.maxPlayers,
+                server.fps or 0,
+                server.ping or 0
+            )
+            
+            -- Create Button inside ScrollingFrame
+            local btn = Library:Create('TextButton', {
+                Parent = serverScroll,
+                Text = text,
+                Size = UDim2.new(1, -10, 0, 30),
+                BackgroundColor3 = Library.MainColor,
+                TextColor3 = Library.FontColor,
+                Font = Library.Font,
+                TextSize = 14,
+                ZIndex = 10
+            })
+            
+            -- Styling
+            Library:OnHighlight(btn, btn,
+                { BorderColor3 = 'AccentColor' },
+                { BorderColor3 = 'OutlineColor' }
+            )
+            
+            btn.MouseButton1Click:Connect(function()
+                joinServer(server.id) -- server.id is the JobId
+            end)
+        end
+        
+        -- Update Canvas Size
+        task.wait(0.1)
+        local layout = serverScroll:FindFirstChildOfClass("UIListLayout")
+        if layout then
+            serverScroll.CanvasSize = UDim2.new(0, 0, 0, layout.AbsoluteContentSize.Y)
+        end
+    end)
 end
 
-ServerGroup:AddButton('Refresh Servers', refreshServers)
+ServerGroup:AddButton('Refresh Servers', fetchServers)
 
--- Initial Refresh
-task.delay(1, refreshServers)
+-- Initial Fetch
+task.delay(1, fetchServers)
 
 
 -- ============================================================================
