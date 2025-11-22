@@ -1,7 +1,6 @@
 -- ServerBrowserHandler.lua
--- Replicates GuiHandler logic for Bloodlines
--- Sources data from ReplicatedStorage.Servers
--- FIX: ZIndex updated to 10
+-- FIX: Uses Auto-Sizing Frame inside GroupBox (Native Scroll Behavior)
+-- FIX: Correct ZIndex
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Players = game:GetService("Players")
@@ -13,22 +12,14 @@ function ServerBrowserHandler.new()
     local self = setmetatable({}, ServerBrowserHandler)
     self.container = nil
     self.serverButtons = {}
-    
     self.serversFolder = ReplicatedStorage:WaitForChild("Servers", 5)
     self.eventsFolder = ReplicatedStorage:WaitForChild("Events", 5)
-    
     return self
 end
 
 function ServerBrowserHandler:Initialize(containerFrame)
     self.container = containerFrame
     self:Refresh()
-    
-    if self.serversFolder then
-        self.serversFolder.ChildAdded:Connect(function() 
-             -- self:Refresh() -- Optional auto-refresh
-        end)
-    end
 end
 
 function ServerBrowserHandler:Clear()
@@ -37,22 +28,18 @@ function ServerBrowserHandler:Clear()
         btn:Destroy()
     end
     self.serverButtons = {}
-    self.container.CanvasSize = UDim2.new(0, 0, 0, 0)
 end
 
 function ServerBrowserHandler:JoinServer(serverId)
     if not self.eventsFolder then return end
     local dataEvent = self.eventsFolder:FindFirstChild("DataEvent")
-    if dataEvent and dataEvent:IsA("RemoteEvent") then
+    if dataEvent then
         dataEvent:FireServer("ServerTeleport", serverId, 14)
-    else
-        warn("DataEvent not found!")
     end
 end
 
 function ServerBrowserHandler:CreateServerButton(serverValueObj)
-    if not self.container then return end
-    if not serverValueObj:IsA("StringValue") then return end
+    if not self.container or not serverValueObj:IsA("StringValue") then return end
     
     local rawValue = serverValueObj.Value
     local splitData = string.split(rawValue, ' ')
@@ -61,8 +48,7 @@ function ServerBrowserHandler:CreateServerButton(serverValueObj)
     local serverName = serverValueObj.Name
     
     local region = "Unknown"
-    local regionObj = serverValueObj:FindFirstChild("Region")
-    if regionObj then region = regionObj.Value end
+    if serverValueObj:FindFirstChild("Region") then region = serverValueObj.Region.Value end
     
     local isCurrent = serverValueObj:FindFirstChild("Current") ~= nil
     local displayText = string.format("%s | %s | %s/20", serverName, region, playerCount)
@@ -78,16 +64,14 @@ function ServerBrowserHandler:CreateServerButton(serverValueObj)
     btn.TextXAlignment = Enum.TextXAlignment.Left
     btn.Font = Enum.Font.SourceSansSemibold
     btn.TextSize = 14
-    btn.ZIndex = 10 -- FIX: High ZIndex to ensure visibility
+    btn.ZIndex = 10 -- High ZIndex
     btn.Parent = self.container
     
     local sortOrder = tonumber(playerCount) or 0
     btn.LayoutOrder = -sortOrder
     
     if not isCurrent then
-        btn.MouseButton1Click:Connect(function()
-            self:JoinServer(serverId)
-        end)
+        btn.MouseButton1Click:Connect(function() self:JoinServer(serverId) end)
     else
         btn.AutoButtonColor = false
         btn.TextTransparency = 0.5
@@ -104,28 +88,19 @@ function ServerBrowserHandler:Refresh()
     for _, child in ipairs(children) do
         pcall(function() self:CreateServerButton(child) end)
     end
-    
-    if self.container then
-        local layout = self.container:FindFirstChildOfClass("UIListLayout")
-        if layout then
-            self.container.CanvasSize = UDim2.new(0, 0, 0, layout.AbsoluteContentSize.Y)
-        end
-    end
 end
 
 function ServerBrowserHandler:Search(query)
     if not self.container then return end
     query = query:lower()
-    local visibleCount = 0
+    
     for _, btn in ipairs(self.serverButtons) do
         if query == "" or btn.Name:lower():find(query) then
             btn.Visible = true
-            visibleCount = visibleCount + 1
         else
             btn.Visible = false
         end
     end
-    self.container.CanvasSize = UDim2.new(0, 0, 0, visibleCount * 32)
 end
 
 return ServerBrowserHandler

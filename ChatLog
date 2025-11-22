@@ -1,0 +1,181 @@
+-- ChatLog Module based on PuppyAdmin logic
+local Players = game:GetService("Players")
+local TextChatService = game:GetService("TextChatService")
+
+local ChatLog = {}
+ChatLog.__index = ChatLog
+
+local MAX_CHAT_MESSAGES = 100 -- Limit messages displayed
+
+function ChatLog.new(playerGui)
+    local self = setmetatable({}, ChatLog)
+    self.playerGui = playerGui
+    self.enabled = false
+    self.chatLogGui = nil
+    self.chatLogFrame = nil
+    self.chatLogLayout = nil
+    -- Removed self._connections table as storing the callback directly is problematic
+
+    -- Create GUI immediately but keep disabled
+    self:_createChatLogGui()
+
+    return self
+end
+
+-- Helper: Safecall wrapper
+local function safeCall(func, ...)
+	local success, result = pcall(func, ...)
+	if not success then
+		local trace = debug.traceback()
+		warn("ChatLog Error:", result, "\nStack Trace:\n" .. trace)
+	end
+	return success, result
+end
+
+-- Add Chat Message Logic
+function ChatLog:_addChatMessageToLog(playerName, message)
+	safeCall(function()
+		if not self.chatLogFrame or not self.chatLogLayout then return end
+
+		local messageLabel = Instance.new("TextLabel")
+		messageLabel.Name = "ChatMessage"
+		messageLabel.Text = "[" .. playerName .. "]: " .. message
+		messageLabel.Font = Enum.Font.SourceSans -- Consistent font
+		messageLabel.TextSize = 14
+		messageLabel.TextColor3 = Color3.fromRGB(255, 255, 255) -- White text
+		messageLabel.TextWrapped = true
+		messageLabel.TextXAlignment = Enum.TextXAlignment.Left
+		messageLabel.Size = UDim2.new(1, 0, 0, 0) -- Automatic Y size
+		messageLabel.AutomaticSize = Enum.AutomaticSize.Y
+		messageLabel.BackgroundTransparency = 1
+		messageLabel.Parent = self.chatLogFrame
+
+		-- Limit number of messages
+		local messages = self.chatLogFrame:GetChildren()
+        local messageCount = 0
+        local toDestroy = {}
+        -- Count valid message labels first
+		for i = #messages, 1, -1 do
+            local child = messages[i]
+            -- Make sure it's the correct type before checking name
+            if child:IsA("TextLabel") and child.Name == "ChatMessage" then
+                messageCount = messageCount + 1
+            end
+        end
+        -- Determine how many to destroy
+        local excess = messageCount - MAX_CHAT_MESSAGES
+        if excess > 0 then
+            local destroyedCount = 0
+            for i=1, #messages do
+                local child = messages[i]
+                if child:IsA("TextLabel") and child.Name == "ChatMessage" then
+                    table.insert(toDestroy, child)
+                    destroyedCount = destroyedCount + 1
+                    if destroyedCount >= excess then break end
+                end
+            end
+        end
+        -- Destroy excess messages
+        for _, lbl in ipairs(toDestroy) do lbl:Destroy() end
+
+		-- Auto-scroll to bottom
+		task.wait() -- Wait for layout update
+		self.chatLogFrame.CanvasPosition = Vector2.new(0, self.chatLogLayout.AbsoluteContentSize.Y)
+		self.chatLogFrame.CanvasSize = UDim2.new(0,0,0, self.chatLogLayout.AbsoluteContentSize.Y) -- Update CanvasSize
+	end)
+end
+
+-- Create Chat Log GUI Logic
+function ChatLog:_createChatLogGui()
+	safeCall(function()
+		if self.chatLogGui and self.chatLogGui.Parent then return end
+
+		local screenGui = Instance.new("ScreenGui", self.playerGui)
+		screenGui.Name = "ChatLogGui"
+		screenGui.ResetOnSpawn = false
+		screenGui.Enabled = false -- Start disabled
+		screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+
+		local mainFrame = Instance.new("Frame", screenGui)
+		mainFrame.Name = "ChatFrame"
+		mainFrame.AnchorPoint = Vector2.new(0, 1) -- Bottom left anchor
+		mainFrame.Position = UDim2.new(0, 50, 1, -10) -- Positioned slightly right
+		mainFrame.Size = UDim2.new(0, 300, 0, 200) -- Chat log size
+		mainFrame.BackgroundColor3 = Color3.fromRGB(255, 182, 193) -- Light Pink
+		mainFrame.BackgroundTransparency = 0.3
+		mainFrame.BorderColor3 = Color3.fromRGB(255, 105, 180) -- Hot Pink
+		mainFrame.Draggable = true
+		mainFrame.Active = true
+		mainFrame.Selectable = true
+
+		local corner = Instance.new("UICorner", mainFrame)
+		corner.CornerRadius = UDim.new(0, 8)
+
+		local logFrame = Instance.new("ScrollingFrame", mainFrame)
+		logFrame.Name = "LogFrame"
+		logFrame.Position = UDim2.new(0, 5, 0, 5)
+		logFrame.Size = UDim2.new(1, -10, 1, -10) -- Takes full height
+		logFrame.BackgroundTransparency = 0.5
+		logFrame.BackgroundColor3 = Color3.fromRGB(0,0,0) -- Darker background
+		logFrame.BorderSizePixel = 0
+		logFrame.CanvasSize = UDim2.new(0, 0, 0, 0)
+		logFrame.ScrollBarThickness = 6
+		logFrame.ScrollBarImageColor3 = Color3.fromRGB(255, 105, 180) -- Hot Pink scrollbar
+		self.chatLogFrame = logFrame -- Store reference
+
+		local logLayout = Instance.new("UIListLayout", logFrame)
+		logLayout.Padding = UDim.new(0, 3)
+		logLayout.SortOrder = Enum.SortOrder.LayoutOrder -- Keep messages in order
+		self.chatLogLayout = logLayout -- Store reference
+		
+		self.chatLogGui = screenGui
+	end)
+end
+
+-- Enable/Disable Logic
+function ChatLog:enable()
+    if self.enabled or not TextChatService then return end
+    self.enabled = true
+    if self.chatLogGui then self.chatLogGui.Enabled = true end
+
+    TextChatService.OnIncomingMessage = function(message: TextChatMessage)
+        -- Keep 'self' context by wrapping
+        safeCall(function()
+            if message.TextSource then
+                local sourcePlayer = Players:GetPlayerByUserId(message.TextSource.UserId)
+                if sourcePlayer then
+                    self:_addChatMessageToLog(sourcePlayer.Name, message.Text)
+                end
+            -- Optional: Handle system messages if needed
+            -- elseif message.Status == Enum.TextChatMessageStatus.Success then
+            --    self:_addChatMessageToLog("System", message.Text)
+            end
+        end)
+        return nil -- Important for OnIncomingMessage callback
+    end
+end
+
+function ChatLog:disable()
+    if not self.enabled then return end
+    self.enabled = false
+    if self.chatLogGui then self.chatLogGui.Enabled = false end
+
+    -- Disconnect by setting the callback to nil
+    if TextChatService then
+        TextChatService.OnIncomingMessage = nil
+    end
+end
+
+-- Cleanup
+function ChatLog:destroy()
+    self:disable() -- Ensure callback is set to nil
+    if self.chatLogGui then self.chatLogGui:Destroy() end
+    -- Clear references
+    self.chatLogGui = nil
+    self.chatLogFrame = nil
+    self.chatLogLayout = nil
+    -- self._connections table removed
+end
+
+return ChatLog
+

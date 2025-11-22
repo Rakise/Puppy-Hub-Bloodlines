@@ -1,0 +1,259 @@
+-- ObserveUI Module (Spectate Only)
+-- Removes inventory/item viewing logic as requested
+
+local Players = game:GetService("Players")
+local Workspace = game:GetService("Workspace")
+local RunService = game:GetService("RunService")
+
+local ObserveUI = {}
+ObserveUI.__index = ObserveUI
+
+function ObserveUI.new(playerGui)
+    local self = setmetatable({}, ObserveUI)
+    self.playerGui = playerGui
+    self.enabled = false
+    
+    -- UI References
+    self.observeGui = nil
+    self.listFrame = nil
+    self.listLayout = nil
+    self.stopButton = nil
+    self.playerButtons = {} -- [Player] = TextButton
+    
+    -- State
+    self.currentlyObserving = nil
+    self._connections = {}
+    
+    self:_createUI()
+    
+    return self
+end
+
+-- Safe call wrapper
+local function safeCall(func, ...)
+    local success, result = pcall(func, ...)
+    if not success then
+        warn("[ObserveUI] Error:", result)
+    end
+    return success, result
+end
+
+function ObserveUI:_createUI()
+    if self.observeGui then return end
+    
+    local screenGui = Instance.new("ScreenGui")
+    screenGui.Name = "ObserveGui"
+    screenGui.ResetOnSpawn = false
+    screenGui.Enabled = false
+    screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+    screenGui.Parent = self.playerGui
+    self.observeGui = screenGui
+    
+    -- Main Container (Player List)
+    local mainFrame = Instance.new("Frame")
+    mainFrame.Name = "MainFrame"
+    mainFrame.AnchorPoint = Vector2.new(1, 1)
+    mainFrame.Position = UDim2.new(1, -10, 1, -10) -- Bottom Right
+    mainFrame.Size = UDim2.new(0, 160, 0, 250)
+    mainFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+    mainFrame.BackgroundTransparency = 0.2
+    mainFrame.BorderSizePixel = 2
+    mainFrame.BorderColor3 = Color3.fromRGB(255, 105, 180) -- Hot Pink Accent
+    mainFrame.Parent = screenGui
+    
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 6)
+    corner.Parent = mainFrame
+    
+    -- Title
+    local title = Instance.new("TextLabel")
+    title.Name = "Title"
+    title.Size = UDim2.new(1, 0, 0, 30)
+    title.BackgroundTransparency = 1
+    title.Text = "Spectate Player"
+    title.Font = Enum.Font.GothamBold
+    title.TextSize = 16
+    title.TextColor3 = Color3.fromRGB(255, 255, 255)
+    title.Parent = mainFrame
+    
+    -- Scrolling List
+    local scrollFrame = Instance.new("ScrollingFrame")
+    scrollFrame.Name = "PlayerList"
+    scrollFrame.Position = UDim2.new(0, 5, 0, 35)
+    scrollFrame.Size = UDim2.new(1, -10, 1, -70) -- Leave room for Stop button
+    scrollFrame.BackgroundTransparency = 1
+    scrollFrame.BorderSizePixel = 0
+    scrollFrame.ScrollBarThickness = 4
+    scrollFrame.ScrollBarImageColor3 = Color3.fromRGB(255, 105, 180)
+    scrollFrame.CanvasSize = UDim2.new(0, 0, 0, 0) -- Auto-updated
+    scrollFrame.Parent = mainFrame
+    self.listFrame = scrollFrame
+    
+    local layout = Instance.new("UIListLayout")
+    layout.SortOrder = Enum.SortOrder.Name
+    layout.Padding = UDim.new(0, 2)
+    layout.Parent = scrollFrame
+    self.listLayout = layout
+    
+    -- Stop Button
+    local stopBtn = Instance.new("TextButton")
+    stopBtn.Name = "StopButton"
+    stopBtn.AnchorPoint = Vector2.new(0.5, 1)
+    stopBtn.Position = UDim2.new(0.5, 0, 1, -5)
+    stopBtn.Size = UDim2.new(0.9, 0, 0, 25)
+    stopBtn.BackgroundColor3 = Color3.fromRGB(255, 60, 60)
+    stopBtn.Text = "Stop Spectating"
+    stopBtn.Font = Enum.Font.GothamBold
+    stopBtn.TextColor3 = Color3.new(1, 1, 1)
+    stopBtn.TextSize = 14
+    stopBtn.Visible = false
+    stopBtn.Parent = mainFrame
+    self.stopButton = stopBtn
+    
+    local btnCorner = Instance.new("UICorner")
+    btnCorner.CornerRadius = UDim.new(0, 4)
+    btnCorner.Parent = stopBtn
+    
+    stopBtn.MouseButton1Click:Connect(function()
+        self:StopObserving()
+    end)
+end
+
+function ObserveUI:_addPlayer(player)
+    if player == Players.LocalPlayer then return end
+    if self.playerButtons[player] then return end
+    if not self.listFrame then return end
+    
+    local btn = Instance.new("TextButton")
+    btn.Name = player.Name
+    btn.Size = UDim2.new(1, -4, 0, 25)
+    btn.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+    btn.BorderSizePixel = 0
+    btn.Font = Enum.Font.GothamSemibold
+    btn.Text = player.Name
+    btn.TextColor3 = Color3.fromRGB(220, 220, 220)
+    btn.TextSize = 13
+    btn.AutoButtonColor = true
+    btn.Parent = self.listFrame
+    
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 4)
+    corner.Parent = btn
+    
+    btn.MouseButton1Click:Connect(function()
+        self:StartObserving(player)
+    end)
+    
+    self.playerButtons[player] = btn
+    self:_updateCanvas()
+end
+
+function ObserveUI:_removePlayer(player)
+    local btn = self.playerButtons[player]
+    if btn then
+        btn:Destroy()
+        self.playerButtons[player] = nil
+        self:_updateCanvas()
+    end
+    
+    if self.currentlyObserving == player then
+        self:StopObserving()
+    end
+end
+
+function ObserveUI:_updateCanvas()
+    if self.listFrame and self.listLayout then
+        self.listFrame.CanvasSize = UDim2.new(0, 0, 0, self.listLayout.AbsoluteContentSize.Y)
+    end
+end
+
+function ObserveUI:StartObserving(targetPlayer)
+    local char = targetPlayer.Character
+    if not char then return end
+    
+    local subject = char:FindFirstChild("Head") or char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Humanoid")
+    
+    if subject then
+        Workspace.CurrentCamera.CameraSubject = subject
+        self.currentlyObserving = targetPlayer
+        
+        if self.stopButton then 
+            self.stopButton.Visible = true 
+            self.stopButton.Text = "Stop: " .. targetPlayer.Name
+        end
+    end
+end
+
+function ObserveUI:StopObserving()
+    local localPlayer = Players.LocalPlayer
+    local char = localPlayer.Character
+    if char then
+        local hum = char:FindFirstChild("Humanoid")
+        if hum then
+            Workspace.CurrentCamera.CameraSubject = hum
+        end
+    end
+    
+    self.currentlyObserving = nil
+    if self.stopButton then self.stopButton.Visible = false end
+end
+
+function ObserveUI:enable()
+    if self.enabled then return end
+    self.enabled = true
+    
+    if self.observeGui then self.observeGui.Enabled = true end
+    
+    -- Add existing players
+    for _, p in ipairs(Players:GetPlayers()) do
+        self:_addPlayer(p)
+    end
+    
+    -- Listen for new players
+    self._connections.PlayerAdded = Players.PlayerAdded:Connect(function(p)
+        self:_addPlayer(p)
+    end)
+    
+    self._connections.PlayerRemoving = Players.PlayerRemoving:Connect(function(p)
+        self:_removePlayer(p)
+    end)
+    
+    -- Auto-update camera if target respawns
+    self._connections.UpdateLoop = RunService.Heartbeat:Connect(function()
+        if self.currentlyObserving then
+            local char = self.currentlyObserving.Character
+            if char then
+                local subject = char:FindFirstChild("Head") or char:FindFirstChild("Humanoid")
+                -- Ensure camera stays locked if it resets
+                if subject and Workspace.CurrentCamera.CameraSubject ~= subject then
+                    Workspace.CurrentCamera.CameraSubject = subject
+                end
+            else
+                -- Target died/despawned
+                -- self:StopObserving() -- Optional: Stop automatically or wait for respawn?
+                -- Let's wait for respawn, Roblox camera usually defaults back to local char if subject nil
+            end
+        end
+    end)
+end
+
+function ObserveUI:disable()
+    self.enabled = false
+    if self.observeGui then self.observeGui.Enabled = false end
+    self:StopObserving()
+    
+    for _, c in pairs(self._connections) do c:Disconnect() end
+    self._connections = {}
+    
+    for p, btn in pairs(self.playerButtons) do
+        btn:Destroy()
+    end
+    self.playerButtons = {}
+end
+
+function ObserveUI:destroy()
+    self:disable()
+    if self.observeGui then self.observeGui:Destroy() end
+end
+
+return ObserveUI

@@ -1,6 +1,6 @@
--- PlayerESPHandler.lua (Bloodlines Specific)
--- Handles ESP parenting to CoreGui and specific data paths
--- OPTIMIZED: Throttled data fetching
+-- PlayerESPHandler.lua
+-- FIX: Increased Size and Visibility (Anti-Gank)
+-- FIX: Throttled Data Fetch
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -16,18 +16,15 @@ function PlayerESPHandler.new()
     local self = setmetatable({}, PlayerESPHandler)
     self.enabled = false
     self.billboards = {}
-    self.dataCache = {} -- [Player] = {Weapon="...", IsObserving=bool, LastUpdate=tick}
+    self.dataCache = {} 
     self.connections = {}
-    self.maxDistance = 2000
+    self.maxDistance = 4000 -- Increased default distance
     return self
 end
 
--- Throttled Data Fetch (Heavy operation)
 function PlayerESPHandler:GetPlayerData(player)
     local now = tick()
-    
-    -- Use cached data if less than 0.25s old (4 updates per second is plenty for weapon/skill changes)
-    if self.dataCache[player] and (now - self.dataCache[player].LastUpdate < 0.25) then
+    if self.dataCache[player] and (now - self.dataCache[player].LastUpdate < 0.5) then
         return self.dataCache[player].Weapon, self.dataCache[player].IsObserving
     end
 
@@ -37,27 +34,16 @@ function PlayerESPHandler:GetPlayerData(player)
     if SETTINGS_FOLDER then
         local playerSettings = SETTINGS_FOLDER:FindFirstChild(player.Name)
         if playerSettings then
-            -- Check Weapon
             local wVal = playerSettings:FindFirstChild("CurrentWeapon")
             if wVal then weapon = wVal.Value end
-            
-            -- Check Skill (Observe)
             local sVal = playerSettings:FindFirstChild("CurrentSkill")
-            if sVal and type(sVal.Value) == "string" then
-                if string.find(string.lower(sVal.Value), "sense") then
-                    isObserving = true
-                end
+            if sVal and type(sVal.Value) == "string" and string.find(string.lower(sVal.Value), "sense") then
+                isObserving = true
             end
         end
     end
     
-    -- Update Cache
-    self.dataCache[player] = {
-        Weapon = weapon,
-        IsObserving = isObserving,
-        LastUpdate = now
-    }
-    
+    self.dataCache[player] = { Weapon = weapon, IsObserving = isObserving, LastUpdate = now }
     return weapon, isObserving
 end
 
@@ -66,29 +52,30 @@ function PlayerESPHandler:CreateBillboard(player)
     
     local billboard = Instance.new("BillboardGui")
     billboard.Name = "PuppyESP_" .. player.Name
-    billboard.Size = UDim2.new(0, 200, 0, 50)
-    billboard.StudsOffset = Vector3.new(0, 3, 0)
+    -- Increased size for better visibility
+    billboard.Size = UDim2.new(0, 250, 0, 70) 
+    billboard.StudsOffset = Vector3.new(0, 4, 0)
     billboard.AlwaysOnTop = true
-    billboard.Parent = CoreGui -- Parent to CoreGui to bypass limits
+    billboard.Parent = CoreGui 
     
     local nameLabel = Instance.new("TextLabel")
-    nameLabel.Size = UDim2.new(1, 0, 0.5, 0)
+    nameLabel.Size = UDim2.new(1, 0, 0.4, 0)
     nameLabel.BackgroundTransparency = 1
     nameLabel.TextColor3 = Color3.new(1, 1, 1)
-    nameLabel.TextStrokeTransparency = 0.5
-    nameLabel.Font = Enum.Font.SourceSansBold
-    nameLabel.TextSize = 14
+    nameLabel.TextStrokeTransparency = 0.3
+    nameLabel.Font = Enum.Font.GothamBold -- Thicker font
+    nameLabel.TextSize = 18 -- Bigger text
     nameLabel.Text = player.Name
     nameLabel.Parent = billboard
     
     local infoLabel = Instance.new("TextLabel")
-    infoLabel.Size = UDim2.new(1, 0, 0.5, 0)
-    infoLabel.Position = UDim2.new(0, 0, 0.5, 0)
+    infoLabel.Size = UDim2.new(1, 0, 0.4, 0)
+    infoLabel.Position = UDim2.new(0, 0, 0.4, 0)
     infoLabel.BackgroundTransparency = 1
-    infoLabel.TextColor3 = Color3.new(0.8, 0.8, 0.8)
-    infoLabel.TextStrokeTransparency = 0.5
-    infoLabel.Font = Enum.Font.SourceSans
-    infoLabel.TextSize = 12
+    infoLabel.TextColor3 = Color3.new(0.9, 0.9, 0.9)
+    infoLabel.TextStrokeTransparency = 0.3
+    infoLabel.Font = Enum.Font.GothamSemibold
+    infoLabel.TextSize = 14 -- Bigger info text
     infoLabel.Text = "..."
     infoLabel.Parent = billboard
     
@@ -104,38 +91,31 @@ function PlayerESPHandler:Update()
     
     for _, player in ipairs(Players:GetPlayers()) do
         if player ~= Players.LocalPlayer and player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
-            -- Ensure Billboard Exists
-            if not self.billboards[player] then
-                self:CreateBillboard(player)
-            end
+            if not self.billboards[player] then self:CreateBillboard(player) end
             
             local data = self.billboards[player]
             local char = player.Character
             local hrp = char.HumanoidRootPart
             local hum = char:FindFirstChild("Humanoid")
             
-            -- Update Adornee (Critical for CoreGui parenting)
             data.gui.Adornee = hrp
             
-            -- Data Fetch (Throttled)
             local weapon, isObserving = self:GetPlayerData(player)
             local hp = hum and math.floor(hum.Health) or 0
             local maxHp = hum and math.floor(hum.MaxHealth) or 100
             local dist = math.floor((Players.LocalPlayer.Character.HumanoidRootPart.Position - hrp.Position).Magnitude)
             
-            -- Apply Observe Effect (Blue)
-            local color = isObserving and Color3.fromRGB(0, 190, 255) or Color3.fromRGB(255, 255, 255)
+            local color = isObserving and Color3.fromRGB(0, 220, 255) or Color3.fromRGB(255, 255, 255)
+            if dist < 100 then color = Color3.fromRGB(255, 50, 50) end -- Red warning if close
             
             data.nameLbl.TextColor3 = color
             data.nameLbl.Text = string.format("%s [%dm]", player.Name, dist)
             
             data.infoLbl.TextColor3 = color
-            data.infoLbl.Text = string.format("HP: %d/%d | Wep: %s", hp, maxHp, weapon)
+            data.infoLbl.Text = string.format("HP: %d/%d\nWep: %s", hp, maxHp, weapon)
             
-            -- Distance Culling (Optional internal check if maxDistance is set)
             data.gui.Enabled = dist < self.maxDistance
         else
-            -- Hide if character missing
             if self.billboards[player] then
                 self.billboards[player].gui.Adornee = nil
                 self.billboards[player].gui.Enabled = false
@@ -147,10 +127,7 @@ end
 function PlayerESPHandler:enable()
     if self.enabled then return end
     self.enabled = true
-    self.connections.Update = RunService.RenderStepped:Connect(function()
-        self:Update()
-    end)
-    
+    self.connections.Update = RunService.RenderStepped:Connect(function() self:Update() end)
     self.connections.PlayerRem = Players.PlayerRemoving:Connect(function(p)
         if self.billboards[p] then
             self.billboards[p].gui:Destroy()
@@ -164,10 +141,7 @@ function PlayerESPHandler:disable()
     self.enabled = false
     if self.connections.Update then self.connections.Update:Disconnect() end
     if self.connections.PlayerRem then self.connections.PlayerRem:Disconnect() end
-    
-    for _, b in pairs(self.billboards) do
-        b.gui:Destroy()
-    end
+    for _, b in pairs(self.billboards) do b.gui:Destroy() end
     self.billboards = {}
     self.dataCache = {}
 end
