@@ -6,6 +6,7 @@
     - Panic Mode: INSTANTLY disables ALL movement hacks when "Chakra Sense" is equipped.
     - Standard Modules: ESP, TransTrail, etc.
     - REMOVED: AutoAim (Requested)
+    - FIX: Does not force default WalkSpeed/JumpPower when disabled/panic (prevents overriding game mechanics)
 ]]
 
 -- Services
@@ -151,23 +152,24 @@ RunService.Heartbeat:Connect(function()
     
     if hum then
         -- WalkSpeed Logic
+        -- Only override if enabled AND NOT in panic mode
         if State.WalkSpeedEnabled and not State.IsPanicMode then
             if hum.WalkSpeed ~= State.WalkSpeed then
                 hum.WalkSpeed = State.WalkSpeed
             end
-        else
-            -- Force default if disabled OR Panic Mode is active
-            if hum.WalkSpeed ~= 16 then
-                hum.WalkSpeed = 16
-            end
         end
+        -- If Panic Mode is ON or Feature is OFF, we DO NOTHING.
+        -- This lets the game set the speed naturally (e.g. slowing down for skills).
         
         -- JumpPower Logic
         if State.JumpPowerEnabled and not State.IsPanicMode then
             if hum.UseJumpPower then
-                hum.JumpPower = State.JumpPower
+                if hum.JumpPower ~= State.JumpPower then
+                    hum.JumpPower = State.JumpPower
+                end
             else
-                hum.JumpHeight = State.JumpPower / 5
+                -- Convert power to height roughly if needed, though UseJumpPower is standard
+                -- hum.JumpHeight = State.JumpPower / 5 
             end
         end
     end
