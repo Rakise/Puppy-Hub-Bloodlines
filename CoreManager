@@ -152,14 +152,13 @@ RunService.Heartbeat:Connect(function()
     
     if hum then
         -- WalkSpeed Logic
-        -- Only override if enabled AND NOT in panic mode
+        -- Only apply if enabled AND NOT in panic mode
         if State.WalkSpeedEnabled and not State.IsPanicMode then
             if hum.WalkSpeed ~= State.WalkSpeed then
                 hum.WalkSpeed = State.WalkSpeed
             end
         end
-        -- If Panic Mode is ON or Feature is OFF, we DO NOTHING.
-        -- This lets the game set the speed naturally (e.g. slowing down for skills).
+        -- If disabled or panic, do NOTHING (let game control speed)
         
         -- JumpPower Logic
         if State.JumpPowerEnabled and not State.IsPanicMode then
