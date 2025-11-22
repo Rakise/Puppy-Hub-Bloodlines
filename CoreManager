@@ -15,7 +15,7 @@ local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local BRAZIL_HUB_BASE_URL = "https://raw.githubusercontent.com/Rakise/Puppy-Hub-Bloodlines/refs/heads/main/"
 local REPO_BASE_URL = 'https://raw.githubusercontent.com/violin-suzutsuki/LinoriaLib/refs/heads/main/'
 
--- Load Library
+-- Load Library 
 local Library = loadstring(game:HttpGet(REPO_BASE_URL .. 'Library.lua'))()
 local ThemeManager = loadstring(game:HttpGet(REPO_BASE_URL .. 'addons/ThemeManager.lua'))()
 local SaveManager = loadstring(game:HttpGet(REPO_BASE_URL .. 'addons/SaveManager.lua'))()
@@ -72,7 +72,7 @@ local State = {
     CFrameSpeedValue = 1,
     
     -- Internal
-    IsPanicMode = false -- True if Chakra Sense is active
+    IsPanicMode = false -- True if Chakra Sense is active on ANY player
 }
 
 local SETTINGS_FOLDER = ReplicatedStorage:WaitForChild("Settings", 10)
@@ -86,7 +86,8 @@ local Window = Library:CreateWindow({
     Center = true,
     AutoShow = true,
     TabPadding = 8,
-    MenuFadeTime = 0.2
+    MenuFadeTime = 0.2,
+    Size = UDim2.fromOffset(700, 600) -- Increased width
 })
 
 local Tabs = {
@@ -100,31 +101,37 @@ local Tabs = {
 -- MOVEMENT LOGIC (PANIC MODE ENABLED)
 -- ============================================================================
 
--- 1. Panic Check (Chakra Sense)
+-- 1. Panic Check (Chakra Sense - Global Check)
 local function checkPanicMode()
     local found = false
     
-    -- Check ReplicatedStorage Settings (Primary Check)
-    if SETTINGS_FOLDER then
-        local playerSettings = SETTINGS_FOLDER:FindFirstChild(LocalPlayer.Name)
-        if playerSettings then
-            local sVal = playerSettings:FindFirstChild("CurrentSkill")
-            if sVal and type(sVal.Value) == "string" then
-                if string.find(string.lower(sVal.Value), "sense") then
-                    found = true
+    -- Iterate through ALL players, not just LocalPlayer
+    for _, player in ipairs(Players:GetPlayers()) do
+        -- Check ReplicatedStorage Settings (Primary Check)
+        if SETTINGS_FOLDER then
+            local playerSettings = SETTINGS_FOLDER:FindFirstChild(player.Name)
+            if playerSettings then
+                local sVal = playerSettings:FindFirstChild("CurrentSkill")
+                if sVal and type(sVal.Value) == "string" then
+                    if string.find(string.lower(sVal.Value), "sense") then
+                        found = true
+                        break -- Stop checking if we found one
+                    end
                 end
             end
         end
-    end
-    
-    -- Fallback: Check Character Tools (Secondary Check)
-    if not found and LocalPlayer.Character then
-        for _, child in ipairs(LocalPlayer.Character:GetChildren()) do
-            if child:IsA("Tool") and string.find(string.lower(child.Name), "chakra sense") then
-                found = true
-                break
+        
+        -- Fallback: Check Character Tools (Secondary Check)
+        if not found and player.Character then
+            for _, child in ipairs(player.Character:GetChildren()) do
+                if child:IsA("Tool") and string.find(string.lower(child.Name), "chakra sense") then
+                    found = true
+                    break
+                end
             end
         end
+        
+        if found then break end
     end
     
     State.IsPanicMode = found
@@ -498,7 +505,7 @@ local function fetchServers()
         
         for _, server in ipairs(servers) do
             local text = string.format(
-                "Players: %d/%d | FPS: %.0f | Ping: %d",
+                "%d/%d Plrs | FPS: %.0f | Ping: %d",
                 server.playing,
                 server.maxPlayers,
                 server.fps or 0,
