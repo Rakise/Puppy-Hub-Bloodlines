@@ -1,0 +1,261 @@
+--[[
+    Puppy-Hub CoreManager (Bloodlines Edition)
+    Integrates:
+    - Custom Server Browser (ReplicatedStorage based)
+    - Bloodlines Player ESP (Settings based)
+    - Mob/NPC ESP (StringValue based)
+    - Item ESP (Trinket/Fruit/Gem)
+    - Trans Trail
+    - Standard features (AutoAim, etc)
+]]
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local CoreGui = game:GetService("CoreGui")
+local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+
+local LocalPlayer = Players.LocalPlayer
+local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
+
+-- Base URL
+local BRAZIL_HUB_BASE_URL = "https://raw.githubusercontent.com/Rakise/Puppy-Hub-Bloodlines/refs/heads/main/"
+local REPO_BASE_URL = 'https://raw.githubusercontent.com/violin-suzutsuki/LinoriaLib/refs/heads/main/'
+
+-- Load Library
+local Library = loadstring(game:HttpGet(REPO_BASE_URL .. 'Library.lua'))()
+local ThemeManager = loadstring(game:HttpGet(REPO_BASE_URL .. 'addons/ThemeManager.lua'))()
+local SaveManager = loadstring(game:HttpGet(REPO_BASE_URL .. 'addons/SaveManager.lua'))()
+
+-- Helper for loading modules
+local function safeRequire(url, ...)
+    local success, result = pcall(function()
+        return loadstring(game:HttpGet(url))()
+    end)
+    if success then
+        if type(result) == "table" and result.new then
+            return result.new(...)
+        end
+        return result
+    else
+        warn("[PuppyHub] Failed to load module: " .. url)
+        warn(result)
+        return nil
+    end
+end
+
+-- Load Handlers
+local UtilsService = safeRequire(BRAZIL_HUB_BASE_URL .. "UtilsService")
+local ConnectionManager = safeRequire(BRAZIL_HUB_BASE_URL .. "ConnectionManager")
+
+-- Specific Bloodlines Handlers
+local ServerBrowserHandler = safeRequire(BRAZIL_HUB_BASE_URL .. "ServerBrowserHandler")
+local PlayerESPHandler = safeRequire(BRAZIL_HUB_BASE_URL .. "PlayerESPHandler")
+local MobESPHandler = safeRequire(BRAZIL_HUB_BASE_URL .. "MobESPHandler")
+local ItemESPHandler = safeRequire(BRAZIL_HUB_BASE_URL .. "ItemESPHandler") -- Replaces trinket_esp
+local TransTrail = safeRequire(BRAZIL_HUB_BASE_URL .. "TransTrail")
+
+-- Standard Modules
+local AutoAim = safeRequire(BRAZIL_HUB_BASE_URL .. "Auto-Aim")
+local NoFog = safeRequire(BRAZIL_HUB_BASE_URL .. "NoFog")
+
+-- Global State
+local features = {
+    PlayerEsp = false,
+    MobEsp = false,
+    NpcEsp = false,
+    ItemEsp = false,
+    TransTrail = false,
+    NoFog = false,
+}
+
+-- UI Window
+local Window = Library:CreateWindow({
+    Title = '[Puppy Hub] Bloodlines 🩸',
+    Center = true,
+    AutoShow = true,
+    TabPadding = 8,
+    MenuFadeTime = 0.2
+})
+
+local Tabs = {
+    Main = Window:AddTab('Main'),
+    Visuals = Window:AddTab('Visuals'),
+    Servers = Window:AddTab('Server List'),
+    Settings = Window:AddTab('UI Settings'),
+}
+
+-- ========================================
+-- VISUALS TAB
+-- ========================================
+local PlayerGroup = Tabs.Visuals:AddLeftGroupbox('Player ESP')
+local ItemGroup = Tabs.Visuals:AddRightGroupbox('World ESP')
+local MiscGroup = Tabs.Visuals:AddLeftGroupbox('Misc')
+
+-- Player ESP
+PlayerGroup:AddToggle('PlayerESP', {
+    Text = 'Enable Player ESP',
+    Default = false,
+    Tooltip = 'Shows players, weapons, and health. Blue if observing.',
+    Callback = function(val)
+        features.PlayerEsp = val
+        if PlayerESPHandler then
+            if val then PlayerESPHandler:enable() else PlayerESPHandler:disable() end
+        end
+    end
+})
+
+-- Item/Mob ESP
+ItemGroup:AddToggle('MobESP', {
+    Text = 'Mob ESP (Combat)',
+    Default = false,
+    Tooltip = 'Shows hostile mobs (Red)',
+    Callback = function(val)
+        features.MobEsp = val
+        if MobESPHandler then MobESPHandler:toggleMobs(val) end
+    end
+})
+
+ItemGroup:AddToggle('NpcESP', {
+    Text = 'NPC ESP (Dialog)',
+    Default = false,
+    Tooltip = 'Shows friendly NPCs (Yellow)',
+    Callback = function(val)
+        features.NpcEsp = val
+        if MobESPHandler then MobESPHandler:toggleNPCs(val) end
+    end
+})
+
+ItemGroup:AddDivider()
+
+ItemGroup:AddToggle('TrinketESP', {
+    Text = 'Trinket ESP',
+    Default = false,
+    Tooltip = 'Shows Trinkets (Purple)',
+    Callback = function(val)
+        if ItemESPHandler then ItemESPHandler:toggleCategory("Trinket", val) end
+    end
+})
+
+ItemGroup:AddToggle('FruitESP', {
+    Text = 'Fruit ESP',
+    Default = false,
+    Tooltip = 'Shows Fruits (Green)',
+    Callback = function(val)
+        if ItemESPHandler then ItemESPHandler:toggleCategory("Fruit", val) end
+    end
+})
+
+ItemGroup:AddToggle('GemESP', {
+    Text = 'Gem ESP',
+    Default = false,
+    Tooltip = 'Shows Gems (Cyan)',
+    Callback = function(val)
+        if ItemESPHandler then ItemESPHandler:toggleCategory("Gem", val) end
+    end
+})
+
+ItemGroup:AddSlider('ESPDistance', {
+    Text = 'ESP Distance',
+    Default = 1000,
+    Min = 100,
+    Max = 5000,
+    Rounding = 0,
+    Callback = function(val)
+        if ItemESPHandler then ItemESPHandler:setMaxDistance(val) end
+        if MobESPHandler then MobESPHandler:setMaxDistance(val) end
+    end
+})
+
+-- Misc Visuals
+MiscGroup:AddToggle('TransTrailToggle', {
+    Text = 'Trans Flag Trail',
+    Default = false,
+    Callback = function(val)
+        features.TransTrail = val
+        if TransTrail then
+            if val then TransTrail:enable() else TransTrail:disable() end
+        end
+    end
+})
+
+MiscGroup:AddToggle('NoFogToggle', {
+    Text = 'No Fog',
+    Default = false,
+    Callback = function(val)
+        features.NoFog = val
+        if NoFog then
+            if val then NoFog:enable() else NoFog:disable() end
+        end
+    end
+})
+
+
+-- ========================================
+-- SERVER BROWSER TAB
+-- ========================================
+if ServerBrowserHandler then
+    local ServerGroup = Tabs.Servers:AddLeftGroupbox('Server Browser')
+    
+    ServerGroup:AddLabel('Game ID: 10266164381')
+    
+    local refreshBtn = ServerGroup:AddButton('Refresh Servers', function()
+        ServerBrowserHandler:Refresh()
+    end)
+    
+    ServerGroup:AddInput('ServerSearch', {
+        Default = '',
+        Numeric = false,
+        Finished = false,
+        Text = 'Search Server',
+        Placeholder = 'Filter by name...',
+        Callback = function(val)
+            ServerBrowserHandler:Search(val)
+        end
+    })
+
+    -- Create a scrolling frame container for the UI
+    local listFrame = Instance.new("ScrollingFrame")
+    listFrame.Name = "ServerListContainer"
+    listFrame.Size = UDim2.new(1, 0, 0, 300)
+    listFrame.CanvasSize = UDim2.new(0, 0, 0, 0)
+    listFrame.BackgroundTransparency = 0.5
+    listFrame.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+    listFrame.BorderSizePixel = 1
+    listFrame.BorderColor3 = Color3.fromRGB(60, 60, 60)
+    listFrame.ScrollBarThickness = 4
+    
+    local layout = Instance.new("UIListLayout")
+    layout.Parent = listFrame
+    layout.SortOrder = Enum.SortOrder.LayoutOrder
+    layout.Padding = UDim.new(0, 2)
+    
+    -- Inject into LinoriaLib container
+    Library:Create('Frame', {
+        BackgroundTransparency = 1,
+        Size = UDim2.new(1, 0, 0, 310),
+        Parent = ServerGroup.Container
+    }).Parent = ServerGroup.Container -- Hacky insert
+    
+    listFrame.Parent = ServerGroup.Container
+    
+    -- Initialize handler with this frame
+    ServerBrowserHandler:Initialize(listFrame)
+end
+
+-- ========================================
+-- UI SETTINGS
+-- ========================================
+local MenuGroup = Tabs.Settings:AddLeftGroupbox('Menu')
+MenuGroup:AddButton('Unload', function() Library:Unload() end)
+MenuGroup:AddLabel('Menu bind'):AddKeyPicker('MenuKeybind', { Default = 'Insert', NoUI = true, Text = 'Menu keybind' })
+Library.ToggleKeybind = Options.MenuKeybind
+
+ThemeManager:SetLibrary(Library)
+SaveManager:SetLibrary(Library)
+ThemeManager:SetFolder('PuppyHub')
+SaveManager:SetFolder('PuppyHub/Bloodlines')
+ThemeManager:ApplyToTab(Tabs.Settings)
+SaveManager:BuildConfigSection(Tabs.Settings)
+
+print("[Puppy Hub] Bloodlines Edition Loaded")

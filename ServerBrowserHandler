@@ -1,0 +1,118 @@
+-- ServerBrowserHandler.lua
+-- Replicates GuiHandler logic for Bloodlines
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local TeleportService = game:GetService("TeleportService")
+
+local ServerBrowserHandler = {}
+ServerBrowserHandler.__index = ServerBrowserHandler
+
+function ServerBrowserHandler.new()
+    local self = setmetatable({}, ServerBrowserHandler)
+    self.container = nil
+    self.serverButtons = {}
+    self.serversFolder = ReplicatedStorage:WaitForChild("Servers", 10)
+    self.eventsFolder = ReplicatedStorage:WaitForChild("Events", 10)
+    return self
+end
+
+function ServerBrowserHandler:Initialize(containerFrame)
+    self.container = containerFrame
+    self:Refresh()
+end
+
+function ServerBrowserHandler:Clear()
+    if not self.container then return end
+    for _, btn in pairs(self.serverButtons) do
+        btn:Destroy()
+    end
+    self.serverButtons = {}
+    self.container.CanvasSize = UDim2.new(0, 0, 0, 0)
+end
+
+function ServerBrowserHandler:JoinServer(serverId)
+    if not self.eventsFolder then return end
+    local dataEvent = self.eventsFolder:FindFirstChild("DataEvent")
+    if dataEvent then
+        -- Logic from GuiHandler: game.ReplicatedStorage.Events.DataEvent:FireServer("ServerTeleport", _1_upvw, 14)
+        -- _1_upvw is the Server ID
+        dataEvent:FireServer("ServerTeleport", serverId, 14)
+    else
+        warn("DataEvent not found!")
+    end
+end
+
+function ServerBrowserHandler:CreateServerButton(serverValueObj)
+    if not self.container then return end
+    
+    -- Parse Value: "ID PlayerCount"
+    local split = string.split(serverValueObj.Value, ' ')
+    local serverId = split[1]
+    local playerCount = split[2] or "?"
+    local serverName = serverValueObj.Name
+    local region = "Unknown"
+    
+    if serverValueObj:FindFirstChild("Region") then
+        region = serverValueObj.Region.Value
+    end
+    
+    -- Create Button
+    local btn = Instance.new("TextButton")
+    btn.Name = serverName
+    btn.Size = UDim2.new(1, -10, 0, 30)
+    btn.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+    btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    btn.Text = string.format(" %s | Region: %s | Players: %s/20", serverName, region, playerCount)
+    btn.TextXAlignment = Enum.TextXAlignment.Left
+    btn.Font = Enum.Font.SourceSans
+    btn.TextSize = 14
+    btn.Parent = self.container
+    
+    -- Layout Order (sort by player count descending)
+    local countNum = tonumber(playerCount) or 0
+    btn.LayoutOrder = -countNum
+    
+    -- Click Event
+    btn.MouseButton1Click:Connect(function()
+        self:JoinServer(serverId)
+    end)
+    
+    table.insert(self.serverButtons, btn)
+end
+
+function ServerBrowserHandler:Refresh()
+    self:Clear()
+    if not self.serversFolder then return end
+    
+    for _, child in ipairs(self.serversFolder:GetChildren()) do
+        self:CreateServerButton(child)
+    end
+    
+    -- Update Canvas
+    if self.container then
+        local layout = self.container:FindFirstChildOfClass("UIListLayout")
+        if layout then
+            self.container.CanvasSize = UDim2.new(0, 0, 0, layout.AbsoluteContentSize.Y)
+        end
+    end
+end
+
+function ServerBrowserHandler:Search(query)
+    if not self.container then return end
+    query = query:lower()
+    
+    local visibleHeight = 0
+    
+    for _, btn in ipairs(self.serverButtons) do
+        if query == "" or btn.Name:lower():find(query) then
+            btn.Visible = true
+            visibleHeight = visibleHeight + 30 + 2 -- Height + Padding
+        else
+            btn.Visible = false
+        end
+    end
+    
+    self.container.CanvasSize = UDim2.new(0, 0, 0, visibleHeight)
+end
+
+return ServerBrowserHandler

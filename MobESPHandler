@@ -1,0 +1,131 @@
+-- MobESPHandler.lua (Bloodlines Specific)
+-- Handles NPC (Dialog) and Mob (Combat) ESP
+
+local CoreGui = game:GetService("CoreGui")
+local RunService = game:GetService("RunService")
+local Workspace = game:GetService("Workspace")
+
+local MobESPHandler = {}
+MobESPHandler.__index = MobESPHandler
+
+-- Config
+local COLORS = {
+    NPC = Color3.fromRGB(255, 255, 0), -- Yellow
+    MOB = Color3.fromRGB(255, 50, 50)  -- Red
+}
+
+function MobESPHandler.new()
+    local self = setmetatable({}, MobESPHandler)
+    self.showMobs = false
+    self.showNPCs = false
+    self.maxDistance = 1000
+    self.billboards = {} -- [Model] = BillboardGui
+    self.connection = nil
+    return self
+end
+
+function MobESPHandler:CreateBillboard(model, typeStr)
+    if self.billboards[model] then return end
+    
+    local color = (typeStr == "NPC") and COLORS.NPC or COLORS.MOB
+    
+    local bb = Instance.new("BillboardGui")
+    bb.Name = "MobESP"
+    bb.Size = UDim2.new(0, 100, 0, 40)
+    bb.StudsOffset = Vector3.new(0, 3, 0)
+    bb.AlwaysOnTop = true
+    bb.Parent = CoreGui
+    bb.Adornee = model:FindFirstChild("HumanoidRootPart") or model.PrimaryPart
+    
+    local lbl = Instance.new("TextLabel")
+    lbl.Size = UDim2.new(1, 0, 1, 0)
+    lbl.BackgroundTransparency = 1
+    lbl.TextColor3 = color
+    lbl.TextStrokeTransparency = 0.5
+    lbl.Font = Enum.Font.SourceSansBold
+    lbl.TextSize = 12
+    lbl.Text = model.Name
+    lbl.Parent = bb
+    
+    self.billboards[model] = {gui = bb, type = typeStr, lbl = lbl}
+end
+
+function MobESPHandler:Scan()
+    if not self.showMobs and not self.showNPCs then return end
+    
+    for _, model in ipairs(Workspace:GetChildren()) do
+        if model:IsA("Model") and model:FindFirstChild("Humanoid") and not self.billboards[model] then
+            -- Check for "NPC" StringValue
+            local npcVal = model:FindFirstChild("NPC")
+            if npcVal and npcVal:IsA("StringValue") then
+                local val = npcVal.Value
+                
+                if val == "Dialog" and self.showNPCs then
+                    self:CreateBillboard(model, "NPC")
+                elseif val == "Combat" and self.showMobs then
+                    self:CreateBillboard(model, "MOB")
+                end
+            end
+        end
+    end
+end
+
+function MobESPHandler:Update()
+    local camPos = Workspace.CurrentCamera.CFrame.Position
+    
+    for model, data in pairs(self.billboards) do
+        if not model.Parent then
+            data.gui:Destroy()
+            self.billboards[model] = nil
+        else
+            -- Visibility Check based on settings
+            local isVisible = false
+            if data.type == "NPC" and self.showNPCs then isVisible = true end
+            if data.type == "MOB" and self.showMobs then isVisible = true end
+            
+            -- Distance Check
+            if isVisible then
+                local part = data.gui.Adornee
+                if part then
+                    local dist = (part.Position - camPos).Magnitude
+                    if dist > self.maxDistance then isVisible = false end
+                    
+                    -- Update Text with Distance/HP
+                    if isVisible then
+                        local hum = model:FindFirstChild("Humanoid")
+                        local hp = hum and math.floor(hum.Health) or 0
+                        data.lbl.Text = string.format("%s\n[%dm] HP: %d", model.Name, dist, hp)
+                    end
+                else
+                    isVisible = false
+                end
+            end
+            
+            data.gui.Enabled = isVisible
+        end
+    end
+end
+
+function MobESPHandler:StartLoop()
+    if self.connection then return end
+    self.connection = RunService.Heartbeat:Connect(function()
+        if tick() % 1 < 0.1 then self:Scan() end -- Scan less frequently
+        self:Update()
+    end)
+end
+
+function MobESPHandler:toggleMobs(val)
+    self.showMobs = val
+    self:StartLoop()
+end
+
+function MobESPHandler:toggleNPCs(val)
+    self.showNPCs = val
+    self:StartLoop()
+end
+
+function MobESPHandler:setMaxDistance(val)
+    self.maxDistance = val
+end
+
+return MobESPHandler

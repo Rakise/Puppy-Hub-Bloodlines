@@ -1,0 +1,156 @@
+-- PlayerESPHandler.lua (Bloodlines Specific)
+-- Handles ESP parenting to CoreGui and specific data paths
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local CoreGui = game:GetService("CoreGui")
+local RunService = game:GetService("RunService")
+
+local PlayerESPHandler = {}
+PlayerESPHandler.__index = PlayerESPHandler
+
+local SETTINGS_FOLDER = ReplicatedStorage:WaitForChild("Settings", 10)
+
+function PlayerESPHandler.new()
+    local self = setmetatable({}, PlayerESPHandler)
+    self.enabled = false
+    self.billboards = {}
+    self.connections = {}
+    self.maxDistance = 2000
+    return self
+end
+
+function PlayerESPHandler:GetPlayerData(player)
+    local weapon = "None"
+    local isObserving = false
+    
+    if SETTINGS_FOLDER then
+        local playerSettings = SETTINGS_FOLDER:FindFirstChild(player.Name)
+        if playerSettings then
+            -- Check Weapon
+            local wVal = playerSettings:FindFirstChild("CurrentWeapon")
+            if wVal then weapon = wVal.Value end
+            
+            -- Check Skill (Observe)
+            local sVal = playerSettings:FindFirstChild("CurrentSkill")
+            if sVal and type(sVal.Value) == "string" then
+                if string.find(string.lower(sVal.Value), "sense") then
+                    isObserving = true
+                end
+            end
+        end
+    end
+    
+    return weapon, isObserving
+end
+
+function PlayerESPHandler:CreateBillboard(player)
+    if self.billboards[player] then self.billboards[player]:Destroy() end
+    
+    local billboard = Instance.new("BillboardGui")
+    billboard.Name = "PuppyESP_" .. player.Name
+    billboard.Size = UDim2.new(0, 200, 0, 50)
+    billboard.StudsOffset = Vector3.new(0, 3, 0)
+    billboard.AlwaysOnTop = true
+    billboard.Parent = CoreGui -- Parent to CoreGui to bypass limits
+    
+    local nameLabel = Instance.new("TextLabel")
+    nameLabel.Size = UDim2.new(1, 0, 0.5, 0)
+    nameLabel.BackgroundTransparency = 1
+    nameLabel.TextColor3 = Color3.new(1, 1, 1)
+    nameLabel.TextStrokeTransparency = 0.5
+    nameLabel.Font = Enum.Font.SourceSansBold
+    nameLabel.TextSize = 14
+    nameLabel.Text = player.Name
+    nameLabel.Parent = billboard
+    
+    local infoLabel = Instance.new("TextLabel")
+    infoLabel.Size = UDim2.new(1, 0, 0.5, 0)
+    infoLabel.Position = UDim2.new(0, 0, 0.5, 0)
+    infoLabel.BackgroundTransparency = 1
+    infoLabel.TextColor3 = Color3.new(0.8, 0.8, 0.8)
+    infoLabel.TextStrokeTransparency = 0.5
+    infoLabel.Font = Enum.Font.SourceSans
+    infoLabel.TextSize = 12
+    infoLabel.Text = "..."
+    infoLabel.Parent = billboard
+    
+    self.billboards[player] = {
+        gui = billboard,
+        nameLbl = nameLabel,
+        infoLbl = infoLabel
+    }
+end
+
+function PlayerESPHandler:Update()
+    if not self.enabled then return end
+    
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player ~= Players.LocalPlayer and player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
+            -- Ensure Billboard Exists
+            if not self.billboards[player] then
+                self:CreateBillboard(player)
+            end
+            
+            local data = self.billboards[player]
+            local char = player.Character
+            local hrp = char.HumanoidRootPart
+            local hum = char:FindFirstChild("Humanoid")
+            
+            -- Update Adornee (Critical for CoreGui parenting)
+            data.gui.Adornee = hrp
+            
+            -- Data Fetch
+            local weapon, isObserving = self:GetPlayerData(player)
+            local hp = hum and math.floor(hum.Health) or 0
+            local maxHp = hum and math.floor(hum.MaxHealth) or 100
+            local dist = math.floor((Players.LocalPlayer.Character.HumanoidRootPart.Position - hrp.Position).Magnitude)
+            
+            -- Apply Observe Effect (Blue)
+            local color = isObserving and Color3.fromRGB(0, 190, 255) or Color3.fromRGB(255, 255, 255)
+            
+            data.nameLbl.TextColor3 = color
+            data.nameLbl.Text = string.format("%s [%dm]", player.Name, dist)
+            
+            data.infoLbl.TextColor3 = color
+            data.infoLbl.Text = string.format("HP: %d/%d | Wep: %s", hp, maxHp, weapon)
+            
+            -- Distance Culling (Optional internal check if maxDistance is set)
+            data.gui.Enabled = dist < self.maxDistance
+        else
+            -- Hide if character missing
+            if self.billboards[player] then
+                self.billboards[player].gui.Adornee = nil
+                self.billboards[player].gui.Enabled = false
+            end
+        end
+    end
+end
+
+function PlayerESPHandler:enable()
+    if self.enabled then return end
+    self.enabled = true
+    self.connections.Update = RunService.RenderStepped:Connect(function()
+        self:Update()
+    end)
+    
+    self.connections.PlayerRem = Players.PlayerRemoving:Connect(function(p)
+        if self.billboards[p] then
+            self.billboards[p].gui:Destroy()
+            self.billboards[p] = nil
+        end
+    end)
+end
+
+function PlayerESPHandler:disable()
+    self.enabled = false
+    if self.connections.Update then self.connections.Update:Disconnect() end
+    if self.connections.PlayerRem then self.connections.PlayerRem:Disconnect() end
+    
+    for _, b in pairs(self.billboards) do
+        b.gui:Destroy()
+    end
+    self.billboards = {}
+end
+
+return PlayerESPHandler

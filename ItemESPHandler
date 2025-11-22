@@ -1,0 +1,161 @@
+-- ItemESPHandler.lua
+-- Unified handler for Trinkets, Fruits, and Gems
+-- Scans Workspace and ReplicatedStorage (for logic check, though mainly ESPs workspace objects)
+-- Validates using "ID" and "ObjectValue" children
+
+local CoreGui = game:GetService("CoreGui")
+local Workspace = game:GetService("Workspace")
+local RunService = game:GetService("RunService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local ItemESPHandler = {}
+ItemESPHandler.__index = ItemESPHandler
+
+local COLORS = {
+    Trinket = Color3.fromRGB(170, 0, 255), -- Purple
+    Fruit = Color3.fromRGB(0, 255, 0),     -- Green
+    Gem = Color3.fromRGB(0, 255, 255)      -- Cyan
+}
+
+function ItemESPHandler.new()
+    local self = setmetatable({}, ItemESPHandler)
+    self.settings = {
+        Trinket = false,
+        Fruit = false,
+        Gem = false
+    }
+    self.billboards = {} -- [Part] = {gui, type}
+    self.maxDistance = 1000
+    self.connection = nil
+    return self
+end
+
+-- Determine Type based on user rules
+function ItemESPHandler:Identify(obj)
+    -- Validation: Must have "ID" and "ObjectValue"
+    if not obj:FindFirstChild("ID") or not obj:FindFirstChild("ObjectValue") then
+        return nil
+    end
+    
+    local isMesh = obj:IsA("MeshPart")
+    local isModel = obj:IsA("Model")
+    local name = obj.Name
+    
+    -- Rule 1: Trinket (Attribute "RealName")
+    if obj:GetAttribute("RealName") then
+        return "Trinket", obj:GetAttribute("RealName")
+    end
+    
+    -- Rule 2: Gem (MeshPart + Name contains "Gem")
+    if isMesh and string.find(name, "Gem") then
+        return "Gem", name
+    end
+    
+    -- Rule 3: Fruit (MeshPart + Not Trinket/Gem)
+    -- We already checked Trinket (attr) and Gem (name) above
+    if isMesh then
+        return "Fruit", name
+    end
+    
+    return nil -- Unknown
+end
+
+function ItemESPHandler:CreateBillboard(part, typeStr, nameStr)
+    if self.billboards[part] then return end
+    
+    local bb = Instance.new("BillboardGui")
+    bb.Name = "ItemESP"
+    bb.Size = UDim2.new(0, 100, 0, 30)
+    bb.StudsOffset = Vector3.new(0, 1, 0)
+    bb.AlwaysOnTop = true
+    bb.Parent = CoreGui
+    bb.Adornee = part
+    
+    local lbl = Instance.new("TextLabel")
+    lbl.Size = UDim2.new(1, 0, 1, 0)
+    lbl.BackgroundTransparency = 1
+    lbl.TextColor3 = COLORS[typeStr] or Color3.new(1,1,1)
+    lbl.TextStrokeTransparency = 0.5
+    lbl.TextSize = 11
+    lbl.Text = string.format("%s (%s)", nameStr, typeStr)
+    lbl.Parent = bb
+    
+    self.billboards[part] = {gui = bb, type = typeStr}
+end
+
+function ItemESPHandler:Scan()
+    -- Only scan if at least one setting is on
+    if not (self.settings.Trinket or self.settings.Fruit or self.settings.Gem) then return end
+    
+    -- Scan Workspace descendants? Or Children?
+    -- User said "spawn in workspace with no organization". Likely direct children or shallow depth.
+    -- Descendants is expensive. Let's try Children first, maybe Descendants if simple.
+    -- Given "bad organization", Descendants might be needed, but limited depth is safer.
+    -- We'll scan GetDescendants but throttle it heavily or assume GetChildren.
+    -- Let's stick to GetChildren + 1 layer deep if it's a folder? 
+    -- Actually, `ReplicatedStorage.Apple` suggests they are Models/Parts.
+    
+    for _, obj in ipairs(Workspace:GetDescendants()) do
+        if (obj:IsA("MeshPart") or obj:IsA("Model")) and not self.billboards[obj] then
+             -- Optimization: Only check if it has children (ID/ObjectValue)
+             -- Is there a quick way? No.
+             -- Let's check identity
+             local typeStr, nameStr = self:Identify(obj)
+             
+             if typeStr then
+                 -- Check if we want this type
+                 if self.settings[typeStr] then
+                     self:CreateBillboard(obj, typeStr, nameStr)
+                 end
+             end
+        end
+    end
+end
+
+function ItemESPHandler:Update()
+    local camPos = Workspace.CurrentCamera.CFrame.Position
+    
+    for part, data in pairs(self.billboards) do
+        if not part.Parent then
+            data.gui:Destroy()
+            self.billboards[part] = nil
+        else
+            local isEnabled = self.settings[data.type]
+            
+            if isEnabled then
+                local pos = part:IsA("Model") and (part.PrimaryPart and part.PrimaryPart.Position or part:GetPivot().Position) or part.Position
+                local dist = (pos - camPos).Magnitude
+                
+                if dist > self.maxDistance then
+                    isEnabled = false
+                end
+            end
+            
+            data.gui.Enabled = isEnabled
+        end
+    end
+end
+
+function ItemESPHandler:StartLoop()
+    if self.connection then return end
+    -- Slow scan (every 2 seconds), fast update (renderstep/heartbeat)
+    local lastScan = 0
+    self.connection = RunService.Heartbeat:Connect(function()
+        if tick() - lastScan > 2 then
+            self:Scan()
+            lastScan = tick()
+        end
+        self:Update()
+    end)
+end
+
+function ItemESPHandler:toggleCategory(cat, val)
+    self.settings[cat] = val
+    self:StartLoop()
+end
+
+function ItemESPHandler:setMaxDistance(val)
+    self.maxDistance = val
+end
+
+return ItemESPHandler

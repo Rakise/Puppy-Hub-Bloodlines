@@ -1,0 +1,11 @@
+local ScriptURL = "https://raw.githubusercontent.com/Rakise/Puppy-Hub-Bloodlines/refs/heads/main/CoreManager"
+
+-- Executa o script agora (sempre)
+loadstring(game:HttpGet(ScriptURL))()
+
+-- Garante a execução automática ao teleportar (caso o executor suporte)
+if queue_on_teleport then
+    queue_on_teleport('loadstring(game:HttpGet("' .. ScriptURL .. '"))()')
+else
+    print("Executor não possui suporte a 'queue_on_teleport'")
+end
