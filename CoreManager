@@ -52,7 +52,8 @@ local ConnectionManager = safeRequire(BRAZIL_HUB_BASE_URL .. "ConnectionManager"
 local ServerBrowserHandler = safeRequire(BRAZIL_HUB_BASE_URL .. "ServerBrowserHandler")
 local PlayerESPHandler = safeRequire(BRAZIL_HUB_BASE_URL .. "PlayerESPHandler")
 local MobESPHandler = safeRequire(BRAZIL_HUB_BASE_URL .. "MobESPHandler")
-local ItemESPHandler = safeRequire(BRAZIL_HUB_BASE_URL .. "ItemESPHandler") -- Replaces trinket_esp
+local ItemESPHandler = safeRequire(BRAZIL_HUB_BASE_URL .. "ItemESPHandler")
+local ChakraESPHandler = safeRequire(BRAZIL_HUB_BASE_URL .. "ChakraESPHandler") -- New Handler
 local TransTrail = safeRequire(BRAZIL_HUB_BASE_URL .. "TransTrail")
 
 -- Standard Modules
@@ -65,6 +66,7 @@ local features = {
     MobEsp = false,
     NpcEsp = false,
     ItemEsp = false,
+    ChakraEsp = false,
     TransTrail = false,
     NoFog = false,
 }
@@ -152,6 +154,18 @@ ItemGroup:AddToggle('GemESP', {
     Tooltip = 'Shows Gems (Cyan)',
     Callback = function(val)
         if ItemESPHandler then ItemESPHandler:toggleCategory("Gem", val) end
+    end
+})
+
+ItemGroup:AddToggle('ChakraESP', {
+    Text = 'Chakra Point ESP',
+    Default = false,
+    Tooltip = 'Shows Chakra Points (Cyan)',
+    Callback = function(val)
+        features.ChakraEsp = val
+        if ChakraESPHandler then
+            if val then ChakraESPHandler:enable() else ChakraESPHandler:disable() end
+        end
     end
 })
 
@@ -258,4 +272,4 @@ SaveManager:SetFolder('PuppyHub/Bloodlines')
 ThemeManager:ApplyToTab(Tabs.Settings)
 SaveManager:BuildConfigSection(Tabs.Settings)
 
-print("[Puppy Hub] Bloodlines Edition Loaded")
+print("[Puppy Hub] Bloodlines Edition Loaded"

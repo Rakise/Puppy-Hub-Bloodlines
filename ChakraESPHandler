@@ -1,0 +1,137 @@
+-- ChakraESPHandler.lua
+-- Handles ESP for Chakra Points located in workspace.ChakraPoints
+-- Models lack PrimaryParts, so we find the first BasePart for adornee.
+
+local CoreGui = game:GetService("CoreGui")
+local Workspace = game:GetService("Workspace")
+local RunService = game:GetService("RunService")
+
+local ChakraESPHandler = {}
+ChakraESPHandler.__index = ChakraESPHandler
+
+local CONFIG = {
+    COLOR = Color3.fromRGB(0, 255, 255), -- Cyan
+    TEXT_SIZE = 12,
+    MAX_DISTANCE = 2000,
+    UPDATE_INTERVAL = 1.0 -- Scan every second
+}
+
+function ChakraESPHandler.new()
+    local self = setmetatable({}, ChakraESPHandler)
+    self.enabled = false
+    self.billboards = {} -- [Model] = BillboardGui
+    self.connection = nil
+    self.folder = Workspace:FindFirstChild("ChakraPoints")
+    return self
+end
+
+function ChakraESPHandler:GetAdorneePart(model)
+    -- Models don't have PrimaryPart, find first visible part
+    for _, child in ipairs(model:GetChildren()) do
+        if child:IsA("BasePart") then
+            return child
+        end
+    end
+    return nil
+end
+
+function ChakraESPHandler:CreateBillboard(model, pointName)
+    if self.billboards[model] then return end
+
+    local adorneePart = self:GetAdorneePart(model)
+    if not adorneePart then return end -- No part to attach to
+
+    local bb = Instance.new("BillboardGui")
+    bb.Name = "ChakraESP"
+    bb.Size = UDim2.new(0, 100, 0, 40)
+    bb.StudsOffset = Vector3.new(0, 2, 0)
+    bb.AlwaysOnTop = true
+    bb.Parent = CoreGui
+    bb.Adornee = adorneePart
+
+    local lbl = Instance.new("TextLabel")
+    lbl.Size = UDim2.new(1, 0, 1, 0)
+    lbl.BackgroundTransparency = 1
+    lbl.TextColor3 = CONFIG.COLOR
+    lbl.TextStrokeTransparency = 0.5
+    lbl.Font = Enum.Font.SourceSansBold
+    lbl.TextSize = CONFIG.TEXT_SIZE
+    lbl.Text = string.format("[Chakra Point]\n%s", pointName)
+    lbl.Parent = bb
+
+    self.billboards[model] = {gui = bb, label = lbl}
+end
+
+function ChakraESPHandler:Scan()
+    -- Try to find folder if not found yet
+    if not self.folder then
+        self.folder = Workspace:FindFirstChild("ChakraPoints")
+        if not self.folder then return end
+    end
+
+    for _, model in ipairs(self.folder:GetChildren()) do
+        if model:IsA("Model") and not self.billboards[model] then
+            local pointNameVal = model:FindFirstChild("PointName")
+            if pointNameVal and pointNameVal:IsA("StringValue") then
+                self:CreateBillboard(model, pointNameVal.Value)
+            end
+        end
+    end
+end
+
+function ChakraESPHandler:Update()
+    local camPos = Workspace.CurrentCamera.CFrame.Position
+
+    for model, data in pairs(self.billboards) do
+        if not model.Parent then
+            data.gui:Destroy()
+            self.billboards[model] = nil
+        else
+            local adornee = data.gui.Adornee
+            if adornee then
+                local dist = (adornee.Position - camPos).Magnitude
+                data.gui.Enabled = dist < CONFIG.MAX_DISTANCE
+            else
+                -- Try to re-find adornee if lost
+                local newAdornee = self:GetAdorneePart(model)
+                if newAdornee then
+                    data.gui.Adornee = newAdornee
+                else
+                    data.gui.Enabled = false
+                end
+            end
+        end
+    end
+end
+
+function ChakraESPHandler:enable()
+    if self.enabled then return end
+    self.enabled = true
+    
+    local lastScan = 0
+    self.connection = RunService.Heartbeat:Connect(function()
+        local now = tick()
+        if now - lastScan > CONFIG.UPDATE_INTERVAL then
+            self:Scan()
+            lastScan = now
+        end
+        self:Update()
+    end)
+    
+    self:Scan() -- Immediate scan
+end
+
+function ChakraESPHandler:disable()
+    self.enabled = false
+    if self.connection then
+        self.connection:Disconnect()
+        self.connection = nil
+    end
+
+    for _, data in pairs(self.billboards) do
+        data.gui:Destroy()
+    end
+    self.billboards = {}
+end
+
+return ChakraESPHandler
