@@ -1,7 +1,8 @@
 -- ItemESPHandler.lua
 -- Unified handler for Trinkets, Fruits, and Gems
--- FIX: Pending/Retry system to catch items that load their properties late
--- FIX: Proper cleanup on disable
+-- FIX: Real-time updates when walking (StreamingEnabled support)
+-- FIX: Validates using "Pickupable" and "Active" values
+-- FIX: Ignores fake items at specific coordinates
 
 local CoreGui = game:GetService("CoreGui")
 local Workspace = game:GetService("Workspace")
@@ -21,6 +22,7 @@ local COLORS = {
 -- Configuration
 local RENDER_DISTANCE = 1500 
 local PROCESS_RATE = 25 
+local FAKE_POS = Vector3.new(1927.698, -125.871506, -1212.71704)
 
 function ItemESPHandler.new()
     local self = setmetatable({}, ItemESPHandler)
@@ -32,7 +34,7 @@ function ItemESPHandler.new()
     
     -- Lists
     self.validItems = {}   -- [Obj] = {Type, Name, Billboard, Proxy}
-    self.pendingItems = {} -- [Obj] = timestamp (Waiting for ID/ObjectValue to load)
+    self.pendingItems = {} -- [Obj] = timestamp (Waiting for properties to load)
     
     self.connections = {}
     self.localPlayer = Players.LocalPlayer
@@ -45,9 +47,27 @@ function ItemESPHandler:GetCFrame(obj)
     return CFrame.new()
 end
 
+function ItemESPHandler:IsFake(obj)
+    local cf = self:GetCFrame(obj)
+    local pos = cf.Position
+    -- Check distance to known fake spot (tolerance of 1 stud)
+    if (pos - FAKE_POS).Magnitude < 1 then
+        return true
+    end
+    return false
+end
+
 function ItemESPHandler:Identify(obj)
-    -- Strict Validation: Must have ID and ObjectValue
-    if not obj:FindFirstChild("ID") or not obj:FindFirstChild("ObjectValue") then
+    -- Validation: Must have "Pickupable" (String) and "Active" (Bool)
+    -- Note: Some items might use the old "ID"/"ObjectValue" system, so we check both or specific ones based on your request.
+    -- Updated request said: "when a fruit or anything is in workspace it has an StringValue called Pickupable and a BoolValeu called Active"
+    
+    if not obj:FindFirstChild("Pickupable") or not obj:FindFirstChild("Active") then
+        return nil
+    end
+    
+    -- Check for fake position
+    if self:IsFake(obj) then
         return nil
     end
     
@@ -69,7 +89,7 @@ function ItemESPHandler:OnItemAdded(obj)
     
     -- Filter: Only care about Models or MeshParts
     if obj:IsA("Model") or obj:IsA("MeshPart") then
-        -- Add to pending to check later (gives time for children to replicate)
+        -- Add to pending to check later (gives time for children/properties to replicate)
         self.pendingItems[obj] = tick()
     end
 end
@@ -195,7 +215,7 @@ function ItemESPHandler:Start()
     for _, v in ipairs(Workspace:GetChildren()) do self:OnItemAdded(v) end
     for _, v in ipairs(ReplicatedStorage:GetChildren()) do self:OnItemAdded(v) end
     
-    -- Listeners
+    -- Listeners (CRITICAL for new items appearing)
     self.connections.WsAdd = Workspace.ChildAdded:Connect(function(c) self:OnItemAdded(c) end)
     self.connections.WsRem = Workspace.ChildRemoved:Connect(function(c) self:OnItemRemoved(c) end)
     self.connections.RsAdd = ReplicatedStorage.ChildAdded:Connect(function(c) self:OnItemAdded(c) end)
