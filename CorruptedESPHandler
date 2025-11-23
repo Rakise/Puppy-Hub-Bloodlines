@@ -1,0 +1,111 @@
+-- CorruptedESPHandler.lua
+-- Handles ESP for "CorruptedPoint" models in Workspace
+-- These models lack PrimaryParts, similar to ChakraPoints
+
+local CoreGui = game:GetService("CoreGui")
+local Workspace = game:GetService("Workspace")
+
+local CorruptedESPHandler = {}
+CorruptedESPHandler.__index = CorruptedESPHandler
+
+local CONFIG = {
+    COLOR = Color3.fromRGB(150, 0, 255), -- Deep Purple
+    TEXT_SIZE = 14,
+    MAX_DISTANCE = math.huge -- Infinite
+}
+
+function CorruptedESPHandler.new()
+    local self = setmetatable({}, CorruptedESPHandler)
+    self.enabled = false
+    self.billboards = {} -- [Model] = BillboardGui
+    self.connections = {}
+    return self
+end
+
+function CorruptedESPHandler:GetAdorneePart(model)
+    -- Models don't have PrimaryPart, find first visible BasePart
+    for _, child in ipairs(model:GetChildren()) do
+        if child:IsA("BasePart") then
+            return child
+        end
+    end
+    return nil
+end
+
+function CorruptedESPHandler:CreateBillboard(model)
+    if self.billboards[model] then return end
+
+    local adorneePart = self:GetAdorneePart(model)
+    if not adorneePart then return end 
+
+    local bb = Instance.new("BillboardGui")
+    bb.Name = "CorruptedESP"
+    bb.Size = UDim2.new(0, 120, 0, 40)
+    bb.StudsOffset = Vector3.new(0, 3, 0)
+    bb.AlwaysOnTop = true
+    bb.Parent = CoreGui
+    bb.Adornee = adorneePart
+    bb.MaxDistance = CONFIG.MAX_DISTANCE 
+
+    local lbl = Instance.new("TextLabel")
+    lbl.Size = UDim2.new(1, 0, 1, 0)
+    lbl.BackgroundTransparency = 1
+    lbl.TextColor3 = CONFIG.COLOR
+    lbl.TextStrokeTransparency = 0.3
+    lbl.Font = Enum.Font.Creepster -- Spooky font for corruption? Or just Bold
+    if not pcall(function() lbl.Font = Enum.Font.Creepster end) then
+        lbl.Font = Enum.Font.SourceSansBold
+    end
+    lbl.TextSize = CONFIG.TEXT_SIZE
+    lbl.Text = "[Corrupted Point]"
+    lbl.Parent = bb
+
+    self.billboards[model] = bb
+end
+
+function CorruptedESPHandler:CheckPoint(model)
+    if model:IsA("Model") and model.Name == "CorruptedPoint" and not self.billboards[model] then
+        self:CreateBillboard(model)
+    end
+end
+
+function CorruptedESPHandler:Scan()
+    -- Scan entire workspace for CorruptedPoints
+    for _, child in ipairs(Workspace:GetChildren()) do
+        self:CheckPoint(child)
+    end
+end
+
+function CorruptedESPHandler:enable()
+    if self.enabled then return end
+    self.enabled = true
+    
+    self:Scan()
+    
+    -- Listen for new points spawning in Workspace
+    self.connections.ChildAdded = Workspace.ChildAdded:Connect(function(child)
+        task.wait() -- Slight delay to ensure properties load
+        self:CheckPoint(child)
+    end)
+    
+    -- Cleanup removed points
+    self.connections.ChildRemoved = Workspace.ChildRemoved:Connect(function(child)
+        if self.billboards[child] then
+            self.billboards[child]:Destroy()
+            self.billboards[child] = nil
+        end
+    end)
+end
+
+function CorruptedESPHandler:disable()
+    self.enabled = false
+    if self.connections.ChildAdded then self.connections.ChildAdded:Disconnect() self.connections.ChildAdded = nil end
+    if self.connections.ChildRemoved then self.connections.ChildRemoved:Disconnect() self.connections.ChildRemoved = nil end
+
+    for model, bb in pairs(self.billboards) do
+        bb:Destroy()
+    end
+    self.billboards = {}
+end
+
+return CorruptedESPHandler

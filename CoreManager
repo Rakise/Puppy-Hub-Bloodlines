@@ -12,8 +12,8 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 
 -- Base URLs
-local BRAZIL_HUB_BASE_URL = "https://raw.githubusercontent.com/Rakise/Puppy-Hub-Bloodlines/refs/heads/main/"
-local REPO_BASE_URL = 'https://raw.githubusercontent.com/violin-suzutsuki/LinoriaLib/refs/heads/main/'
+local BRAZIL_HUB_BASE_URL = "https://ghproxy.net/https://raw.githubusercontent.com/Rakise/Puppy-Hub-Bloodlines/refs/heads/main/"
+local REPO_BASE_URL = 'https://ghproxy.net/https://raw.githubusercontent.com/violin-suzutsuki/LinoriaLib/refs/heads/main/'
 
 -- Load Library
 local Library = loadstring(game:HttpGet(REPO_BASE_URL .. 'Library.lua'))()
@@ -41,6 +41,7 @@ local PlayerESPHandler = safeRequire(BRAZIL_HUB_BASE_URL .. "PlayerESPHandler")
 local MobESPHandler = safeRequire(BRAZIL_HUB_BASE_URL .. "MobESPHandler")
 local ItemESPHandler = safeRequire(BRAZIL_HUB_BASE_URL .. "ItemESPHandler")
 local ChakraESPHandler = safeRequire(BRAZIL_HUB_BASE_URL .. "ChakraESPHandler")
+local CorruptedESPHandler = safeRequire(BRAZIL_HUB_BASE_URL .. "CorruptedESPHandler") -- NEW
 local TransTrail = safeRequire(BRAZIL_HUB_BASE_URL .. "TransTrail")
 local NoFog = safeRequire(BRAZIL_HUB_BASE_URL .. "NoFog")
 local ObserveUI = safeRequire(BRAZIL_HUB_BASE_URL .. "ObserveUI", PlayerGui)
@@ -406,6 +407,12 @@ ItemGroup:AddToggle('ChakraESP', {
     Text = 'Chakra Point ESP', Default = false,
     Callback = function(val) if ChakraESPHandler then if val then ChakraESPHandler:enable() else ChakraESPHandler:disable() end end end
 })
+-- NEW: Corrupted Point Toggle
+ItemGroup:AddToggle('CorruptedESP', {
+    Text = 'Corrupted Point ESP', Default = false,
+    Callback = function(val) if CorruptedESPHandler then if val then CorruptedESPHandler:enable() else CorruptedESPHandler:disable() end end end
+})
+
 -- Removed Max Distance Slider
 
 MiscGroup:AddToggle('TransTrailToggle', {
@@ -466,7 +473,6 @@ local isFetching = false
 local function fetchServers()
     if isFetching then return end
     isFetching = true
-    StatusLabel:SetText("Fetching via API...")
     
     -- Clear existing buttons in the scroll frame
     for _, child in ipairs(serverScroll:GetChildren()) do
@@ -474,82 +480,120 @@ local function fetchServers()
     end
     
     task.spawn(function()
-        local success, response = pcall(function()
-            -- HTTP Get Wrapper
-            local requestFunc = (syn and syn.request) or (http and http.request) or http_request or (fluxus and fluxus.request) or request
-            local url = string.format(
-                "https://roproxy-production-0200.up.railway.app/games/v1/games/%d/servers/0?sortOrder=2&excludeFullGames=false&limit=100",
-                GAME_ID
-            )
+        local allServers = {}
+        local cursor = ""
+        local pageNum = 1
+        local continueFetching = true
+
+        -- Loop until no pages left
+        while continueFetching do
+            StatusLabel:SetText("Fetching Page " .. pageNum .. "...")
             
-            if requestFunc then
-                local res = requestFunc({Url = url, Method = "GET"})
-                return res.Body
-            else
-                return game:HttpGet(url)
-            end
-        end)
-        
-        isFetching = false
-        
-        if not success or not response then
-            StatusLabel:SetText("Failed to fetch servers.")
-            return
-        end
-        
-        local jsonSuccess, data = pcall(HttpService.JSONDecode, HttpService, response)
-        if not jsonSuccess or not data or not data.data then
-            StatusLabel:SetText("Failed to parse API data.")
-            return
-        end
-        
-        local servers = data.data
-        
-        -- Sort servers by player count (descending)
-        table.sort(servers, function(a, b)
-            return a.playing > b.playing
-        end)
-        
-        StatusLabel:SetText(string.format("Loaded %d servers.", #servers))
-        
-        for _, server in ipairs(servers) do
-            local text = string.format(
-                "%d/%d Plrs | FPS: %.0f | Ping: %d",
-                server.playing,
-                server.maxPlayers,
-                server.fps or 0,
-                server.ping or 0
-            )
-            
-            -- Create Button inside ScrollingFrame
-            local btn = Library:Create('TextButton', {
-                Parent = serverScroll,
-                Text = text,
-                Size = UDim2.new(1, -10, 0, 30),
-                BackgroundColor3 = Library.MainColor,
-                TextColor3 = Library.FontColor,
-                Font = Library.Font,
-                TextSize = 14,
-                ZIndex = 10
-            })
-            
-            -- Styling
-            Library:OnHighlight(btn, btn,
-                { BorderColor3 = 'AccentColor' },
-                { BorderColor3 = 'OutlineColor' }
-            )
-            
-            btn.MouseButton1Click:Connect(function() 
-                joinServer(server.id) -- server.id is the JobId
+            local success, response = pcall(function()
+                -- HTTP Get Wrapper
+                local requestFunc = (syn and syn.request) or (http and http.request) or http_request or (fluxus and fluxus.request) or request
+                
+                -- Build URL with Cursor if it exists
+                local url = string.format(
+                    "https://roproxy-production-0200.up.railway.app/games/v1/games/%d/servers/0?sortOrder=2&excludeFullGames=false&limit=100",
+                    GAME_ID
+                )
+                
+                if cursor ~= "" then
+                    url = url .. "&cursor=" .. cursor
+                end
+                
+                if requestFunc then
+                    local res = requestFunc({Url = url, Method = "GET"})
+                    return res.Body
+                else
+                    return game:HttpGet(url)
+                end
             end)
+            
+            if not success or not response then
+                StatusLabel:SetText("Failed to fetch page " .. pageNum)
+                continueFetching = false
+                break
+            end
+            
+            local jsonSuccess, data = pcall(HttpService.JSONDecode, HttpService, response)
+            if not jsonSuccess or not data or not data.data then
+                StatusLabel:SetText("Failed to parse API data.")
+                continueFetching = false
+                break
+            end
+            
+            -- Add servers from this page to our master list
+            for _, s in ipairs(data.data) do
+                table.insert(allServers, s)
+            end
+
+            -- Check if there is a next page
+            if data.nextPageCursor and data.nextPageCursor ~= JSONNull and data.nextPageCursor ~= "" then
+                cursor = data.nextPageCursor
+                pageNum = pageNum + 1
+                task.wait(0.1) -- Small delay to be nice to the API
+            else
+                continueFetching = false
+            end
         end
         
-        -- Update Canvas Size
-        task.wait(0.1)
-        local layout = serverScroll:FindFirstChildOfClass("UIListLayout")
-        if layout then
-            serverScroll.CanvasSize = UDim2.new(0, 0, 0, layout.AbsoluteContentSize.Y)
+        -- Only proceed if we actually found servers
+        if #allServers > 0 then
+            StatusLabel:SetText("Sorting " .. #allServers .. " servers...")
+
+            -- Sort servers by player count (descending)
+            table.sort(allServers, function(a, b)
+                return (a.playing or 0) > (b.playing or 0)
+            end)
+            
+            StatusLabel:SetText(string.format("Loaded %d servers.", #allServers))
+            
+            -- Render Buttons
+            for _, server in ipairs(allServers) do
+                local text = string.format(
+                    "%d/%d Plrs | FPS: %.0f | Ping: %d",
+                    server.playing,
+                    server.maxPlayers,
+                    server.fps or 0,
+                    server.ping or 0
+                )
+                
+                -- Create Button inside ScrollingFrame
+                local btn = Library:Create('TextButton', {
+                    Parent = serverScroll,
+                    Text = text,
+                    Size = UDim2.new(1, -10, 0, 30),
+                    BackgroundColor3 = Library.MainColor,
+                    TextColor3 = Library.FontColor,
+                    Font = Library.Font,
+                    TextSize = 14,
+                    ZIndex = 10
+                })
+                
+                -- Styling
+                Library:OnHighlight(btn, btn,
+                    { BorderColor3 = 'AccentColor' },
+                    { BorderColor3 = 'OutlineColor' }
+                )
+                
+                btn.MouseButton1Click:Connect(function() 
+                    joinServer(server.id) -- server.id is the JobId
+                end)
+            end
+            
+            -- Update Canvas Size
+            task.wait(0.1)
+            local layout = serverScroll:FindFirstChildOfClass("UIListLayout")
+            if layout then
+                serverScroll.CanvasSize = UDim2.new(0, 0, 0, layout.AbsoluteContentSize.Y)
+            end
+        else
+            StatusLabel:SetText("No servers found or API error.")
         end
+
+        isFetching = false
     end)
 end
 
