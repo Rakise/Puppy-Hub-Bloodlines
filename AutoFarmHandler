@@ -98,7 +98,7 @@ end
 function ServerHop.fetchServers()
     local allServers = {}
     -- FIX: Limit set to 10 to prevent crash
-    local url = string.format("https://roproxy-production-0200.up.railway.app/games/v1/games/%d/servers/0?sortOrder=2&excludeFullGames=false&limit=10", GAME_ID)
+    local url = string.format("https://roproxy-production-0200.up.railway.app/games/v1/games/%d/servers/0?sortOrder=2&excludeFullGames=false&limit=100", GAME_ID)
     
     local success, response = pcall(function()
         local requestFunc = (syn and syn.request) or (http and http.request) or http_request or (fluxus and fluxus.request) or request

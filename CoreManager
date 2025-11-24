@@ -15,7 +15,6 @@ local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 -- Constants
 local BRAZIL_HUB_BASE_URL = "https://ghproxy.net/https://raw.githubusercontent.com/Rakise/Puppy-Hub-Bloodlines/refs/heads/main/"
 local REPO_BASE_URL = 'https://ghproxy.net/https://raw.githubusercontent.com/violin-suzutsuki/LinoriaLib/refs/heads/main/'
-local LOADER_URL = "https://raw.githubusercontent.com/Rakise/Puppy-Hub-Bloodlines/refs/heads/main/Loader"
 local CONFIG_FILE = "PuppyHub_Bloodlines_Config.json"
 
 -- Load Library
@@ -78,12 +77,6 @@ local function LoadConfig()
         end
     end
 end
-
--- Apply QueueOnTeleport globally
-if queue_on_teleport then
-    queue_on_teleport('loadstring(game:HttpGet("' .. LOADER_URL .. '"))()')
-end
-
 -- ============================================================================
 -- AUTO LOGIN & FORCEFIELD LOGIC
 -- ============================================================================
@@ -228,6 +221,86 @@ local Tabs = {
 }
 
 -- ============================================================================
+-- MOVEMENT TAB UI (Restored)
+-- ============================================================================
+local MoveGroup = Tabs.Movement:AddLeftGroupbox('Character')
+local FlyGroup = Tabs.Movement:AddRightGroupbox('Fly')
+local NoclipGroup = Tabs.Movement:AddLeftGroupbox('Noclip')
+local CFrameGroup = Tabs.Movement:AddRightGroupbox('CFrame Speed')
+
+-- Walkspeed
+MoveGroup:AddToggle('WalkSpeedToggle', {
+    Text = 'Enable WalkSpeed', Default = false,
+    Callback = function(val) State.WalkSpeedEnabled = val end
+})
+MoveGroup:AddSlider('WalkSpeedSlider', {
+    Text = 'Speed', Default = 16, Min = 16, Max = 45, Rounding = 0,
+    Callback = function(val) State.WalkSpeed = val end
+})
+
+-- Panic Mode
+MoveGroup:AddToggle('PanicModeToggle', {
+    Text = 'Auto Panic (Chakra Sense)', Default = true,
+    Tooltip = 'Disables movement hacks when someone uses Chakra Sense.',
+    Callback = function(val) State.PanicModeOption = val end
+})
+
+-- JumpPower
+MoveGroup:AddToggle('JumpPowerToggle', {
+    Text = 'Enable JumpPower', Default = false,
+    Callback = function(val) State.JumpPowerEnabled = val end
+})
+MoveGroup:AddSlider('JumpPowerSlider', {
+    Text = 'Power', Default = 50, Min = 0, Max = 100, Rounding = 0,
+    Callback = function(val) State.JumpPower = val end
+})
+
+-- Fly
+FlyGroup:AddToggle('FlyToggle', {
+    Text = 'Enable Fly', Default = false,
+    Callback = function(val) State.Fly = val end
+}):AddKeyPicker('FlyKey', { Default = 'F2', NoUI = true, Text = 'Fly Bind' })
+
+FlyGroup:AddSlider('FlySpeed', {
+    Text = 'Fly Speed', Default = 50, Min = 10, Max = 250, Rounding = 0,
+    Callback = function(val) State.FlySpeed = val end
+})
+FlyGroup:AddSlider('FallSpeed', {
+    Text = 'Fall Speed', Default = 25, Min = 0, Max = 100, Rounding = 0,
+    Callback = function(val) State.FallSpeed = val end
+})
+Options.FlyKey:OnClick(function() Toggles.FlyToggle:SetValue(not Toggles.FlyToggle.Value) end)
+
+-- Noclip
+NoclipGroup:AddToggle('NoclipToggle', {
+    Text = 'Enable Noclip', Default = false,
+    Callback = function(val) State.Noclip = val end
+}):AddKeyPicker('NoclipKey', { Default = 'F3', NoUI = true, Text = 'Noclip Bind' })
+
+NoclipGroup:AddSlider('NoclipSpeed', {
+    Text = 'Move Speed', Default = 150, Min = 100, Max = 275, Rounding = 0,
+    Callback = function(val) State.NoclipSpeed = val end
+})
+NoclipGroup:AddSlider('TweenSpeed', {
+    Text = 'Tween Speed', Default = 1, Min = 0, Max = 5, Rounding = 1,
+    Callback = function(val) State.NoclipTween = val end
+})
+Options.NoclipKey:OnClick(function() Toggles.NoclipToggle:SetValue(not Toggles.NoclipToggle.Value) end)
+
+-- CFrame Speed
+CFrameGroup:AddToggle('CFrameToggle', {
+    Text = 'Enable CFrame Speed', Default = false,
+    Callback = function(val) State.CFrameSpeed = val end
+}):AddKeyPicker('CFrameKey', { Default = 'F4', NoUI = true, Text = 'CF Speed Bind' })
+
+CFrameGroup:AddSlider('CFrameSpeed', {
+    Text = 'Speed Factor', Default = 1, Min = 1, Max = 250, Rounding = 0,
+    Callback = function(val) State.CFrameSpeedValue = val end
+})
+Options.CFrameKey:OnClick(function() Toggles.CFrameToggle:SetValue(not Toggles.CFrameToggle.Value) end)
+
+
+-- ============================================================================
 -- FARMING TAB UI
 -- ============================================================================
 if BossFarm and AutoFarmHandler then
@@ -282,7 +355,7 @@ else
 end
 
 -- ============================================================================
--- MOVEMENT LOGIC
+-- MOVEMENT LOGIC (LOOPS)
 -- ============================================================================
 
 local function checkPanicMode()
@@ -330,6 +403,8 @@ RunService.RenderStepped:Connect(function()
     if UserInputService:IsKeyDown(Enum.KeyCode.Space) then velocity = velocity + Vector3.new(0, State.FlySpeed, 0) end
     if UserInputService:IsKeyDown(Enum.KeyCode.W) then velocity = velocity + lookVector * State.FlySpeed end
     if UserInputService:IsKeyDown(Enum.KeyCode.S) then velocity = velocity - lookVector * State.FlySpeed end
+    if UserInputService:IsKeyDown(Enum.KeyCode.A) then velocity = velocity - Vector3.new(-lookVector.Z, 0, lookVector.X) * State.FlySpeed end
+    if UserInputService:IsKeyDown(Enum.KeyCode.D) then velocity = velocity + Vector3.new(-lookVector.Z, 0, lookVector.X) * State.FlySpeed end
     
     velocity = velocity - Vector3.new(0, State.FallSpeed, 0)
     root.Velocity = velocity
