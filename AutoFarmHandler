@@ -1,7 +1,7 @@
 -- AutoFarmHandler.lua
 -- Handles Fruit Summoning Macro and Auto Pickup
--- OPTIMIZED: Uses caching to prevent FPS drops (No longer scans workspace every loop)
--- DEBUG MODE: Prints added to troubleshoot Slot equipping
+-- OPTIMIZED: Uses caching to prevent FPS drops
+-- UPDATED: Uses ClickDetector (ItemDetector) for pickup instead of RemoteEvents
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -34,11 +34,9 @@ local State = {
 -- ============================================================================
 
 local function isValidPickup(obj)
-    -- Fast checks first
-    if not obj:IsA("BasePart") then return false end
-    
-    -- Check for required children
-    if obj:FindFirstChild("Pickupable") and obj:FindFirstChild("ID") then
+    -- Updated: Detect via ItemDetector (ClickDetector) instead of ID/Pickupable
+    local detector = obj:FindFirstChild("ItemDetector")
+    if detector and detector:IsA("ClickDetector") then
         return true
     end
     return false
@@ -62,7 +60,7 @@ local function startTracking()
 
     -- 2. Listen for new items dropping
     State.Connections.Tracking = Workspace.ChildAdded:Connect(function(child)
-        -- Wait briefly for attributes/children (like ID) to replicate
+        -- Wait briefly for attributes/children to replicate
         task.delay(0.5, function()
             if child.Parent then -- Ensure it wasn't deleted immediately
                 addToCache(child)
@@ -94,10 +92,6 @@ local function doPickup()
     local root = character and character:FindFirstChild("HumanoidRootPart")
     if not root then return end
 
-    local events = ReplicatedStorage:FindFirstChild("Events")
-    local dataEvent = events and events:FindFirstChild("DataEvent")
-    if not dataEvent then return end
-
     local range = AutoFarmHandler.Settings.PickupRange
 
     -- Iterate ONLY the cached items (Efficiency: High)
@@ -105,12 +99,28 @@ local function doPickup()
         if not AutoFarmHandler.Settings.AutoPickup then break end
 
         if item.Parent then
-            local dist = (root.Position - item.Position).Magnitude
-            if dist <= range then
-                if item:FindFirstChild("ID") then
-                    dataEvent:FireServer('PickUp', item.ID.Value)
-                    -- Wait here to prevent spamming remote too fast
-                    task.wait(AutoFarmHandler.Settings.PickupDelay)
+            -- Determine item position safely (Handle both Parts and Models)
+            local itemPos = nil
+            if item:IsA("BasePart") then
+                itemPos = item.Position
+            elseif item:IsA("Model") then
+                itemPos = item:GetPivot().Position
+            end
+
+            if itemPos then
+                local dist = (root.Position - itemPos).Magnitude
+                if dist <= range then
+                    local detector = item:FindFirstChild("ItemDetector")
+                    if detector and detector:IsA("ClickDetector") then
+                        if fireclickdetector then
+                            -- Uses exact distance to look legit
+                            fireclickdetector(detector, dist) 
+                            -- Debug print (Optional)
+                            -- print("[AutoFarm] Clicked detector at dist: " .. tostring(dist))
+                        end
+                        -- Wait here to prevent spamming click too fast
+                        task.wait(AutoFarmHandler.Settings.PickupDelay)
+                    end
                 end
             end
         else
@@ -180,7 +190,7 @@ local function clickSkillSlot()
             if slotText and string.find(string.lower(slotText.Text), "fruit summoning") then
                 print("[AutoFarm] MATCH FOUND in " .. slot.Name .. "! Attempting to equip...")
                 
-                -- 1. Equip Slot (Simulate full click: Down -> Up) 
+                -- 1. Equip Slot (Simulate full click: Down -> Up)
                 if firesignal then
                     print("[AutoFarm] Firing signal (MouseButton1Down)...")
                     firesignal(slot.MouseButton1Down)
