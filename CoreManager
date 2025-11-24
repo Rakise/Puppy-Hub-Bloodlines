@@ -41,11 +41,15 @@ local PlayerESPHandler = safeRequire(BRAZIL_HUB_BASE_URL .. "PlayerESPHandler")
 local MobESPHandler = safeRequire(BRAZIL_HUB_BASE_URL .. "MobESPHandler")
 local ItemESPHandler = safeRequire(BRAZIL_HUB_BASE_URL .. "ItemESPHandler")
 local ChakraESPHandler = safeRequire(BRAZIL_HUB_BASE_URL .. "ChakraESPHandler")
-local CorruptedESPHandler = safeRequire(BRAZIL_HUB_BASE_URL .. "CorruptedESPHandler") -- NEW
+local CorruptedESPHandler = safeRequire(BRAZIL_HUB_BASE_URL .. "CorruptedESPHandler")
 local TransTrail = safeRequire(BRAZIL_HUB_BASE_URL .. "TransTrail")
 local NoFog = safeRequire(BRAZIL_HUB_BASE_URL .. "NoFog")
 local ObserveUI = safeRequire(BRAZIL_HUB_BASE_URL .. "ObserveUI", PlayerGui)
 local ChatLog = safeRequire(BRAZIL_HUB_BASE_URL .. "ChatLog", PlayerGui)
+
+-- NEW: Load Farming Modules
+local BossFarm = safeRequire(BRAZIL_HUB_BASE_URL .. "BossFarm")
+local AutoFarmHandler = safeRequire(BRAZIL_HUB_BASE_URL .. "AutoFarmHandler")
 
 -- ============================================================================
 -- GLOBAL STATE & CONFIG
@@ -89,15 +93,99 @@ local Window = Library:CreateWindow({
     AutoShow = true,
     TabPadding = 8,
     MenuFadeTime = 0.2,
-    Size = UDim2.fromOffset(700, 600) -- Increased width
+    Size = UDim2.fromOffset(700, 600)
 })
 
 local Tabs = {
     Visuals = Window:AddTab('Visuals'),
     Movement = Window:AddTab('Movement'),
+    Farming = Window:AddTab('Farming'), -- NEW TAB
     Servers = Window:AddTab('Server List'),
     Settings = Window:AddTab('UI Settings'),
 }
+
+-- ============================================================================
+-- FARMING TAB UI (NEW)
+-- ============================================================================
+if BossFarm and AutoFarmHandler then
+    local FarmLeft = Tabs.Farming:AddLeftGroupbox('Auto Summon & Pickup')
+    local FarmRight = Tabs.Farming:AddRightGroupbox('Boss Farm')
+
+    -- Auto Summon Section
+    FarmLeft:AddToggle('AutoPickupToggle', {
+        Text = 'Auto Pickup Items',
+        Default = false,
+        Tooltip = 'Automatically picks up Fruits, Trinkets, etc.',
+        Callback = function(val)
+            AutoFarmHandler.togglePickup(val)
+        end
+    })
+    
+    FarmLeft:AddToggle('AutoSummonToggle', {
+        Text = 'Auto Fruit Summon',
+        Default = false,
+        Tooltip = 'Automatically uses Fruit Summoning skill from loadout.',
+        Callback = function(val)
+            AutoFarmHandler.toggleSummon(val)
+        end
+    }):AddKeyPicker('AutoSummonKey', {
+        Default = 'P',
+        Text = 'Toggle Summon',
+        Mode = 'Toggle', -- Toggles the boolean state
+    })
+    
+    Options.AutoSummonKey:OnClick(function()
+        Toggles.AutoSummonToggle:SetValue(not Toggles.AutoSummonToggle.Value)
+    end)
+    
+    FarmLeft:AddSlider('PickupRange', {
+        Text = 'Pickup Range', Default = 50, Min = 10, Max = 100, Rounding = 0,
+        Callback = function(val) AutoFarmHandler.Settings.PickupRange = val end
+    })
+
+    -- Boss Farm Section
+    FarmRight:AddToggle('BossFarmEnabled', {
+        Text = 'Enable Boss Farm',
+        Default = false,
+        Callback = function(val)
+            BossFarm.Settings.Enabled = val
+            if val then BossFarm.start() else BossFarm.stop() end
+        end
+    })
+    
+    FarmRight:AddDropdown('BossSelection', {
+        Values = BossFarm.bossDatabase,
+        Default = 1,
+        Multi = true,
+        Text = 'Select Bosses',
+        Tooltip = 'Select which bosses to farm',
+        Callback = function(val)
+            BossFarm.Settings.SelectedBosses = val
+        end
+    })
+    
+    FarmRight:AddToggle('ServerHopBoss', {
+        Text = 'Hop If No Boss', Default = false,
+        Callback = function(val) BossFarm.Settings.ServerHopIfNoBoss = val end
+    })
+    
+    FarmRight:AddToggle('ServerHopChakra', {
+        Text = 'Hop On Chakra Sense', Default = false,
+        Callback = function(val) BossFarm.Settings.ServerHopIfChakraSense = val end
+    })
+    
+    FarmRight:AddSlider('AttackInterval', {
+        Text = 'Attack Speed (s)', Default = 0.5, Min = 0.1, Max = 2, Rounding = 1,
+        Callback = function(val) BossFarm.Settings.AttackInterval = val end
+    })
+    
+    FarmRight:AddSlider('SafeHeight', {
+        Text = 'Safe Height', Default = 30, Min = 10, Max = 100, Rounding = 0,
+        Callback = function(val) BossFarm.Settings.SafeHeightOffset = val end
+    })
+else
+    Tabs.Farming:AddLeftGroupbox('Error'):AddLabel("Farming modules failed to load.")
+end
 
 -- ============================================================================
 -- MOVEMENT LOGIC (PANIC MODE ENABLED)
@@ -105,7 +193,6 @@ local Tabs = {
 
 -- 1. Panic Check (Chakra Sense - Global Check)
 local function checkPanicMode()
-    -- If the user disabled the panic mode feature, skip checks
     if not State.PanicModeOption then 
         State.IsPanicMode = false
         return 
@@ -113,9 +200,7 @@ local function checkPanicMode()
 
     local found = false
     
-    -- Iterate through ALL players, not just LocalPlayer
     for _, player in ipairs(Players:GetPlayers()) do
-        -- Check ReplicatedStorage Settings (Primary Check)
         if SETTINGS_FOLDER then
             local playerSettings = SETTINGS_FOLDER:FindFirstChild(player.Name)
             if playerSettings then
@@ -123,13 +208,12 @@ local function checkPanicMode()
                 if sVal and type(sVal.Value) == "string" then
                     if string.find(string.lower(sVal.Value), "sense") then
                         found = true
-                        break -- Stop checking if we found one
+                        break 
                     end
                 end
             end
         end
         
-        -- Fallback: Check Character Tools (Secondary Check)
         if not found and player.Character then
             for _, child in ipairs(player.Character:GetChildren()) do
                 if child:IsA("Tool") and string.find(string.lower(child.Name), "chakra sense") then
@@ -143,6 +227,15 @@ local function checkPanicMode()
     end
     
     State.IsPanicMode = found
+    
+    -- Safety shutdown for Farming if panic
+    if State.IsPanicMode and BossFarm and BossFarm.Settings.Enabled then
+        if BossFarm.Settings.ServerHopIfChakraSense then
+             -- Logic handled inside BossFarm module (it monitors chakra sense too)
+        else
+             -- Temporary pause logic could go here
+        end
+    end
 end
 
 -- 2. WalkSpeed & JumpPower Loop
@@ -151,28 +244,20 @@ RunService.Heartbeat:Connect(function()
     if not char then return end
     local hum = char:FindFirstChild("Humanoid")
     
-    -- Update Panic State
     checkPanicMode()
     
     if hum then
-        -- WalkSpeed Logic
-        -- Only apply if enabled AND NOT in panic mode
         if State.WalkSpeedEnabled and not State.IsPanicMode then
             if hum.WalkSpeed ~= State.WalkSpeed then
                 hum.WalkSpeed = State.WalkSpeed
             end
         end
-        -- If disabled or panic, do NOTHING (let game control speed)
         
-        -- JumpPower Logic
         if State.JumpPowerEnabled and not State.IsPanicMode then
             if hum.UseJumpPower then
                 if hum.JumpPower ~= State.JumpPower then
                     hum.JumpPower = State.JumpPower
                 end
-            else
-                -- Convert power to height roughly if needed, though UseJumpPower is standard
-                -- hum.JumpHeight = State.JumpPower / 5 
             end
         end
     end
@@ -180,7 +265,6 @@ end)
 
 -- 3. Fly Logic
 RunService.RenderStepped:Connect(function()
-    -- Panic Mode disables Fly instantly
     if not State.Fly or State.IsPanicMode then return end
     
     local char = LocalPlayer.Character
@@ -216,14 +300,12 @@ end)
 task.spawn(function()
     while true do
         local char = LocalPlayer.Character
-        -- Panic Mode disables Noclip instantly
         if State.Noclip and char and not State.IsPanicMode then
             local hum = char:FindFirstChild("Humanoid")
             local root = char:FindFirstChild("HumanoidRootPart")
             
             if hum and root then
                 hum:ChangeState(Enum.HumanoidStateType.Jumping)
-                
                 for _, v in ipairs(char:GetDescendants()) do
                     if v:IsA("BasePart") then v.CanCollide = false end
                 end
@@ -232,7 +314,6 @@ task.spawn(function()
                 TweenService:Create(root, TweenInfo.new(0, Enum.EasingStyle.Linear), {CFrame = newpos}):Play()
             end
         else
-            -- Restore collision if Noclip off OR Panic Mode on
             if char then
                 local root = char:FindFirstChild("HumanoidRootPart")
                 if root then root.CanCollide = true end
@@ -244,7 +325,6 @@ end)
 
 -- 5. CFrame Speed Logic
 RunService.RenderStepped:Connect(function()
-    -- Panic Mode disables CFrame Speed instantly
     if State.CFrameSpeed and not State.IsPanicMode then
         local char = LocalPlayer.Character
         if char and char:FindFirstChild("HumanoidRootPart") and char:FindFirstChild("Humanoid") then
@@ -265,37 +345,28 @@ local FlyGroup = Tabs.Movement:AddRightGroupbox('Fly')
 local NoclipGroup = Tabs.Movement:AddLeftGroupbox('Noclip')
 local CFrameGroup = Tabs.Movement:AddRightGroupbox('CFrame Speed')
 
--- Walkspeed
 MoveGroup:AddToggle('WalkSpeedToggle', {
-    Text = 'Enable WalkSpeed',
-    Default = false,
+    Text = 'Enable WalkSpeed', Default = false,
     Callback = function(val) State.WalkSpeedEnabled = val end
 })
 MoveGroup:AddSlider('WalkSpeedSlider', {
     Text = 'Speed', Default = 16, Min = 16, Max = 45, Rounding = 0,
     Callback = function(val) State.WalkSpeed = val end
 })
-
--- Panic Mode Toggle
 MoveGroup:AddToggle('PanicModeToggle', {
-    Text = 'Auto Panic (Chakra Sense)',
-    Default = true,
+    Text = 'Auto Panic (Chakra Sense)', Default = true,
     Tooltip = 'Disables movement hacks when someone uses Chakra Sense.',
     Callback = function(val) State.PanicModeOption = val end
 })
-
--- JumpPower
 MoveGroup:AddToggle('JumpPowerToggle', {
-    Text = 'Enable JumpPower',
-    Default = false,
+    Text = 'Enable JumpPower', Default = false,
     Callback = function(val) State.JumpPowerEnabled = val end
 })
 MoveGroup:AddSlider('JumpPowerSlider', {
-    Text = 'Power', Default = 50, Min = 0, Max = 100, Rounding = 0, -- Changed Min to 0 to allow grabbing from char
+    Text = 'Power', Default = 50, Min = 0, Max = 100, Rounding = 0,
     Callback = function(val) State.JumpPower = val end
 })
 
--- Fly
 FlyGroup:AddToggle('FlyToggle', {
     Text = 'Enable Fly', Default = false,
     Callback = function(val) State.Fly = val end
@@ -309,23 +380,13 @@ FlyGroup:AddSlider('FallSpeed', {
     Text = 'Fall Speed', Default = 25, Min = 0, Max = 100, Rounding = 0,
     Callback = function(val) State.FallSpeed = val end
 })
+Options.FlyKey:OnClick(function() Toggles.FlyToggle:SetValue(not Toggles.FlyToggle.Value) end)
 
-Library.ToggleKeybind = Options.MenuKeybind 
-
-Options.FlyKey:OnClick(function()
-    Toggles.FlyToggle:SetValue(not Toggles.FlyToggle.Value)
-end)
-
--- Noclip
 NoclipGroup:AddToggle('NoclipToggle', {
     Text = 'Enable Noclip', Default = false,
     Callback = function(val) State.Noclip = val end
 }):AddKeyPicker('NoclipKey', { Default = 'F3', NoUI = true, Text = 'Noclip Bind' })
-
-Options.NoclipKey:OnClick(function()
-    Toggles.NoclipToggle:SetValue(not Toggles.NoclipToggle.Value)
-end)
-
+Options.NoclipKey:OnClick(function() Toggles.NoclipToggle:SetValue(not Toggles.NoclipToggle.Value) end)
 NoclipGroup:AddSlider('NoclipSpeed', {
     Text = 'Move Speed', Default = 150, Min = 100, Max = 275, Rounding = 0,
     Callback = function(val) State.NoclipSpeed = val end
@@ -335,16 +396,11 @@ NoclipGroup:AddSlider('TweenSpeed', {
     Callback = function(val) State.NoclipTween = val end
 })
 
--- CFrame Speed
 CFrameGroup:AddToggle('CFrameToggle', {
     Text = 'Enable CFrame Speed', Default = false,
     Callback = function(val) State.CFrameSpeed = val end
 }):AddKeyPicker('CFrameKey', { Default = 'F4', NoUI = true, Text = 'CF Speed Bind' })
-
-Options.CFrameKey:OnClick(function()
-    Toggles.CFrameToggle:SetValue(not Toggles.CFrameToggle.Value)
-end)
-
+Options.CFrameKey:OnClick(function() Toggles.CFrameToggle:SetValue(not Toggles.CFrameToggle.Value) end)
 CFrameGroup:AddSlider('CFrameSpeed', {
     Text = 'Speed Factor', Default = 1, Min = 1, Max = 250, Rounding = 0,
     Callback = function(val) State.CFrameSpeedValue = val end
@@ -407,13 +463,10 @@ ItemGroup:AddToggle('ChakraESP', {
     Text = 'Chakra Point ESP', Default = false,
     Callback = function(val) if ChakraESPHandler then if val then ChakraESPHandler:enable() else ChakraESPHandler:disable() end end end
 })
--- NEW: Corrupted Point Toggle
 ItemGroup:AddToggle('CorruptedESP', {
     Text = 'Corrupted Point ESP', Default = false,
     Callback = function(val) if CorruptedESPHandler then if val then CorruptedESPHandler:enable() else CorruptedESPHandler:disable() end end end
 })
-
--- Removed Max Distance Slider
 
 MiscGroup:AddToggle('TransTrailToggle', {
     Text = 'Trans Flag Trail', Default = false,
@@ -426,14 +479,12 @@ MiscGroup:AddToggle('NoFogToggle', {
 
 
 -- ============================================================================
--- API SERVER BROWSER (Replaces old ReplicatedStorage browser)
+-- API SERVER BROWSER
 -- ============================================================================
 local ServerGroup = Tabs.Servers:AddLeftGroupbox('Server Browser (API)')
-local GAME_ID = 10266164381 -- Bloodlines Place ID
+local GAME_ID = 10266164381
 
--- Bloodlines specific join logic
 local function joinServer(id)
-    -- 'id' here corresponds to the JobId from the API
     local events = ReplicatedStorage:FindFirstChild("Events")
     local dataEvent = events and events:FindFirstChild("DataEvent")
     if dataEvent then
@@ -444,10 +495,7 @@ local function joinServer(id)
     end
 end
 
--- UI Elements for Status
 local StatusLabel = ServerGroup:AddLabel("Click 'Refresh' to load servers.")
-
--- Create a Scrollbox (manually managed for button clearing)
 local serverScroll = Library:Create('ScrollingFrame', {
     Name = "ServerListScroll",
     Size = UDim2.new(1, -4, 0, 400),
@@ -459,7 +507,6 @@ local serverScroll = Library:Create('ScrollingFrame', {
     ScrollBarThickness = 6,
     ScrollBarImageColor3 = Library.AccentColor,
 })
-
 Library:Create('UIListLayout', {
     Padding = UDim.new(0, 5),
     FillDirection = Enum.FillDirection.Vertical,
@@ -469,139 +516,54 @@ Library:Create('UIListLayout', {
 })
 
 local isFetching = false
-
 local function fetchServers()
     if isFetching then return end
     isFetching = true
-    
-    -- Clear existing buttons in the scroll frame
     for _, child in ipairs(serverScroll:GetChildren()) do
         if child:IsA("TextButton") then child:Destroy() end
     end
-    
     task.spawn(function()
         local allServers = {}
         local cursor = ""
         local pageNum = 1
         local continueFetching = true
 
-        -- Loop until no pages left
         while continueFetching do
             StatusLabel:SetText("Fetching Page " .. pageNum .. "...")
-            
             local success, response = pcall(function()
-                -- HTTP Get Wrapper
                 local requestFunc = (syn and syn.request) or (http and http.request) or http_request or (fluxus and fluxus.request) or request
-                
-                -- Build URL with Cursor if it exists
-                local url = string.format(
-                    "https://roproxy-production-0200.up.railway.app/games/v1/games/%d/servers/0?sortOrder=2&excludeFullGames=false&limit=100",
-                    GAME_ID
-                )
-                
-                if cursor ~= "" then
-                    url = url .. "&cursor=" .. cursor
-                end
-                
-                if requestFunc then
-                    local res = requestFunc({Url = url, Method = "GET"})
-                    return res.Body
-                else
-                    return game:HttpGet(url)
-                end
+                local url = string.format("https://roproxy-production-0200.up.railway.app/games/v1/games/%d/servers/0?sortOrder=2&excludeFullGames=false&limit=100", GAME_ID)
+                if cursor ~= "" then url = url .. "&cursor=" .. cursor end
+                if requestFunc then return requestFunc({Url = url, Method = "GET"}).Body else return game:HttpGet(url) end
             end)
-            
-            if not success or not response then
-                StatusLabel:SetText("Failed to fetch page " .. pageNum)
-                continueFetching = false
-                break
-            end
-            
+            if not success or not response then StatusLabel:SetText("Failed to fetch page " .. pageNum) continueFetching = false break end
             local jsonSuccess, data = pcall(HttpService.JSONDecode, HttpService, response)
-            if not jsonSuccess or not data or not data.data then
-                StatusLabel:SetText("Failed to parse API data.")
-                continueFetching = false
-                break
-            end
-            
-            -- Add servers from this page to our master list
-            for _, s in ipairs(data.data) do
-                table.insert(allServers, s)
-            end
-
-            -- Check if there is a next page
-            if data.nextPageCursor and data.nextPageCursor ~= JSONNull and data.nextPageCursor ~= "" then
-                cursor = data.nextPageCursor
-                pageNum = pageNum + 1
-                task.wait(0.1) -- Small delay to be nice to the API
-            else
-                continueFetching = false
-            end
+            if not jsonSuccess or not data or not data.data then StatusLabel:SetText("Failed to parse API data.") continueFetching = false break end
+            for _, s in ipairs(data.data) do table.insert(allServers, s) end
+            if data.nextPageCursor and data.nextPageCursor ~= "" then cursor = data.nextPageCursor pageNum = pageNum + 1 task.wait(0.1) else continueFetching = false end
         end
         
-        -- Only proceed if we actually found servers
         if #allServers > 0 then
             StatusLabel:SetText("Sorting " .. #allServers .. " servers...")
-
-            -- Sort servers by player count (descending)
-            table.sort(allServers, function(a, b)
-                return (a.playing or 0) > (b.playing or 0)
-            end)
-            
+            table.sort(allServers, function(a, b) return (a.playing or 0) > (b.playing or 0) end)
             StatusLabel:SetText(string.format("Loaded %d servers.", #allServers))
-            
-            -- Render Buttons
             for _, server in ipairs(allServers) do
-                local text = string.format(
-                    "%d/%d Plrs | FPS: %.0f | Ping: %d",
-                    server.playing,
-                    server.maxPlayers,
-                    server.fps or 0,
-                    server.ping or 0
-                )
-                
-                -- Create Button inside ScrollingFrame
-                local btn = Library:Create('TextButton', {
-                    Parent = serverScroll,
-                    Text = text,
-                    Size = UDim2.new(1, -10, 0, 30),
-                    BackgroundColor3 = Library.MainColor,
-                    TextColor3 = Library.FontColor,
-                    Font = Library.Font,
-                    TextSize = 14,
-                    ZIndex = 10
-                })
-                
-                -- Styling
-                Library:OnHighlight(btn, btn,
-                    { BorderColor3 = 'AccentColor' },
-                    { BorderColor3 = 'OutlineColor' }
-                )
-                
-                btn.MouseButton1Click:Connect(function() 
-                    joinServer(server.id) -- server.id is the JobId
-                end)
+                local text = string.format("%d/%d Plrs | FPS: %.0f | Ping: %d", server.playing, server.maxPlayers, server.fps or 0, server.ping or 0)
+                local btn = Library:Create('TextButton', { Parent = serverScroll, Text = text, Size = UDim2.new(1, -10, 0, 30), BackgroundColor3 = Library.MainColor, TextColor3 = Library.FontColor, Font = Library.Font, TextSize = 14, ZIndex = 10 })
+                Library:OnHighlight(btn, btn, { BorderColor3 = 'AccentColor' }, { BorderColor3 = 'OutlineColor' })
+                btn.MouseButton1Click:Connect(function() joinServer(server.id) end)
             end
-            
-            -- Update Canvas Size
             task.wait(0.1)
             local layout = serverScroll:FindFirstChildOfClass("UIListLayout")
-            if layout then
-                serverScroll.CanvasSize = UDim2.new(0, 0, 0, layout.AbsoluteContentSize.Y)
-            end
+            if layout then serverScroll.CanvasSize = UDim2.new(0, 0, 0, layout.AbsoluteContentSize.Y) end
         else
             StatusLabel:SetText("No servers found or API error.")
         end
-
         isFetching = false
     end)
 end
-
 ServerGroup:AddButton('Refresh Servers', fetchServers)
-
--- Initial Fetch
 task.delay(1, fetchServers)
-
 
 -- ============================================================================
 -- UI SETTINGS & INIT
