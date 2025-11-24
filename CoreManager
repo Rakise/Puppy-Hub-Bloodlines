@@ -7,14 +7,13 @@ local RunService = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
 local Workspace = game:GetService("Workspace")
 local HttpService = game:GetService("HttpService")
-local VirtualInputManager = game:GetService("VirtualInputManager")
 
 local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 
 -- Constants
-local BRAZIL_HUB_BASE_URL = "https://raw.githubusercontent.com/Rakise/Puppy-Hub-Bloodlines/refs/heads/main/"
-local REPO_BASE_URL = 'https://raw.githubusercontent.com/violin-suzutsuki/LinoriaLib/refs/heads/main/'
+local BRAZIL_HUB_BASE_URL = "https://ghproxy.net/https://raw.githubusercontent.com/Rakise/Puppy-Hub-Bloodlines/refs/heads/main/"
+local REPO_BASE_URL = 'https://ghproxy.net/https://raw.githubusercontent.com/violin-suzutsuki/LinoriaLib/refs/heads/main/'
 local CONFIG_FILE = "PuppyHub_Bloodlines_Config.json"
 
 -- Load Library
@@ -226,7 +225,7 @@ local function RemoveForcefield()
     local char = LocalPlayer.Character
     local root = char and char:FindFirstChild("HumanoidRootPart")
     if root then
-        local forwardPos = root.CFrame * CFrame.new(0, 0, -20)
+        local forwardPos = root.CFrame * CFrame.new(0, 0, -40)
         local originalPos = root.CFrame
         local tweenInfo = TweenInfo.new(0.5, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 
@@ -245,7 +244,7 @@ local function RemoveForcefield()
     StartMovementLoops()
 end
 
-local function AutoLoginRoutine()
+function AutoLoginRoutine()
     print("[PuppyHub] Starting Auto-Login Routine...")
     local clientGui = PlayerGui:WaitForChild("ClientGui", 30)
     if not clientGui then return end
@@ -267,11 +266,6 @@ local function AutoLoginRoutine()
                     firesignal(continueBtn.MouseButton1Up)
                     task.wait(0.1)
                     firesignal(continueBtn.MouseButton1Click)
-                else
-                    VirtualInputManager:SendMouseButtonEvent(0,0,0,true,game,1)
-                    task.wait(0.1)
-                    VirtualInputManager:SendMouseButtonEvent(0,0,0,false,game,1)
-                end
             end
         end
     end
@@ -330,38 +324,202 @@ local Tabs = {
     Settings = Window:AddTab('UI Settings'),
 }
 
+-- ============================================================================
+-- MOVEMENT TAB
+-- ============================================================================
+
 local MoveGroup = Tabs.Movement:AddLeftGroupbox('Character')
 local FlyGroup = Tabs.Movement:AddRightGroupbox('Fly')
 local NoclipGroup = Tabs.Movement:AddLeftGroupbox('Noclip')
 local CFrameGroup = Tabs.Movement:AddRightGroupbox('CFrame Speed')
 
-MoveGroup:AddToggle('WalkSpeedToggle', { Text = 'Enable WalkSpeed', Default = false, Callback = function(val) State.WalkSpeedEnabled = val end })
-MoveGroup:AddSlider('WalkSpeedSlider', { Text = 'Speed', Default = 16, Min = 16, Max = 45, Rounding = 0, Callback = function(val) State.WalkSpeed = val end })
-MoveGroup:AddToggle('PanicModeToggle', { Text = 'Auto Panic (Chakra Sense)', Default = true, Callback = function(val) State.PanicModeOption = val end })
-MoveGroup:AddToggle('JumpPowerToggle', { Text = 'Enable JumpPower', Default = false, Callback = function(val) State.JumpPowerEnabled = val end })
-MoveGroup:AddSlider('JumpPowerSlider', { Text = 'Power', Default = 50, Min = 0, Max = 100, Rounding = 0, Callback = function(val) State.JumpPower = val end })
+MoveGroup:AddToggle('WalkSpeedToggle', {
+    Text = 'Enable WalkSpeed',
+    Default = false,
+    Callback = function(val)
+        State.WalkSpeedEnabled = val
+    end
+})
 
-FlyGroup:AddToggle('FlyToggle', { Text = 'Enable Fly', Default = false, Callback = function(val) State.Fly = val end }):AddKeyPicker('FlyKey', { Default = 'F2', NoUI = true, Text = 'Fly Bind' })
-FlyGroup:AddSlider('FlySpeed', { Text = 'Fly Speed', Default = 50, Min = 10, Max = 250, Rounding = 0, Callback = function(val) State.FlySpeed = val end })
-FlyGroup:AddSlider('FallSpeed', { Text = 'Fall Speed', Default = 25, Min = 0, Max = 100, Rounding = 0, Callback = function(val) State.FallSpeed = val end })
-Options.FlyKey:OnClick(function() Toggles.FlyToggle:SetValue(not Toggles.FlyToggle.Value) end)
+MoveGroup:AddSlider('WalkSpeedSlider', {
+    Text = 'Speed',
+    Default = 16,
+    Min = 16,
+    Max = 45,
+    Rounding = 0,
+    Callback = function(val)
+        State.WalkSpeed = val
+    end
+})
 
-NoclipGroup:AddToggle('NoclipToggle', { Text = 'Enable Noclip', Default = false, Callback = function(val) State.Noclip = val end }):AddKeyPicker('NoclipKey', { Default = 'F3', NoUI = true, Text = 'Noclip Bind' })
-NoclipGroup:AddSlider('NoclipSpeed', { Text = 'Move Speed', Default = 150, Min = 100, Max = 275, Rounding = 0, Callback = function(val) State.NoclipSpeed = val end })
-NoclipGroup:AddSlider('TweenSpeed', { Text = 'Tween Speed', Default = 1, Min = 0, Max = 5, Rounding = 1, Callback = function(val) State.NoclipTween = val end })
-Options.NoclipKey:OnClick(function() Toggles.NoclipToggle:SetValue(not Toggles.NoclipToggle.Value) end)
+MoveGroup:AddToggle('PanicModeToggle', {
+    Text = 'Auto Panic (Chakra Sense)',
+    Default = true,
+    Callback = function(val)
+        State.PanicModeOption = val
+    end
+})
 
-CFrameGroup:AddToggle('CFrameToggle', { Text = 'Enable CFrame Speed', Default = false, Callback = function(val) State.CFrameSpeed = val end }):AddKeyPicker('CFrameKey', { Default = 'F4', NoUI = true, Text = 'CF Speed Bind' })
-CFrameGroup:AddSlider('CFrameSpeed', { Text = 'Speed Factor', Default = 1, Min = 1, Max = 250, Rounding = 0, Callback = function(val) State.CFrameSpeedValue = val end })
-Options.CFrameKey:OnClick(function() Toggles.CFrameToggle:SetValue(not Toggles.CFrameToggle.Value) end)
+MoveGroup:AddToggle('JumpPowerToggle', {
+    Text = 'Enable JumpPower',
+    Default = false,
+    Callback = function(val)
+        State.JumpPowerEnabled = val
+    end
+})
+
+MoveGroup:AddSlider('JumpPowerSlider', {
+    Text = 'Power',
+    Default = 50,
+    Min = 0,
+    Max = 100,
+    Rounding = 0,
+    Callback = function(val)
+        State.JumpPower = val
+    end
+})
+
+-- Fly Group
+FlyGroup:AddToggle('FlyToggle', {
+    Text = 'Enable Fly',
+    Default = false,
+    Callback = function(val)
+        State.Fly = val
+    end
+}):AddKeyPicker('FlyKey', {
+    Default = 'F2',
+    NoUI = true,
+    Text = 'Fly Bind'
+})
+
+FlyGroup:AddSlider('FlySpeed', {
+    Text = 'Fly Speed',
+    Default = 50,
+    Min = 10,
+    Max = 250,
+    Rounding = 0,
+    Callback = function(val)
+        State.FlySpeed = val
+    end
+})
+
+FlyGroup:AddSlider('FallSpeed', {
+    Text = 'Fall Speed',
+    Default = 25,
+    Min = 0,
+    Max = 100,
+    Rounding = 0,
+    Callback = function(val)
+        State.FallSpeed = val
+    end
+})
+
+Options.FlyKey:OnClick(function()
+    Toggles.FlyToggle:SetValue(not Toggles.FlyToggle.Value)
+end)
+
+-- Noclip Group
+NoclipGroup:AddToggle('NoclipToggle', {
+    Text = 'Enable Noclip',
+    Default = false,
+    Callback = function(val)
+        State.Noclip = val
+    end
+}):AddKeyPicker('NoclipKey', {
+    Default = 'F3',
+    NoUI = true,
+    Text = 'Noclip Bind'
+})
+
+NoclipGroup:AddSlider('NoclipSpeed', {
+    Text = 'Move Speed',
+    Default = 150,
+    Min = 100,
+    Max = 275,
+    Rounding = 0,
+    Callback = function(val)
+        State.NoclipSpeed = val
+    end
+})
+
+NoclipGroup:AddSlider('TweenSpeed', {
+    Text = 'Tween Speed',
+    Default = 1,
+    Min = 0,
+    Max = 5,
+    Rounding = 1,
+    Callback = function(val)
+        State.NoclipTween = val
+    end
+})
+
+Options.NoclipKey:OnClick(function()
+    Toggles.NoclipToggle:SetValue(not Toggles.NoclipToggle.Value)
+end)
+
+-- CFrame Group
+CFrameGroup:AddToggle('CFrameToggle', {
+    Text = 'Enable CFrame Speed',
+    Default = false,
+    Callback = function(val)
+        State.CFrameSpeed = val
+    end
+}):AddKeyPicker('CFrameKey', {
+    Default = 'F4',
+    NoUI = true,
+    Text = 'CF Speed Bind'
+})
+
+CFrameGroup:AddSlider('CFrameSpeed', {
+    Text = 'Speed Factor',
+    Default = 1,
+    Min = 1,
+    Max = 250,
+    Rounding = 0,
+    Callback = function(val)
+        State.CFrameSpeedValue = val
+    end
+})
+
+Options.CFrameKey:OnClick(function()
+    Toggles.CFrameToggle:SetValue(not Toggles.CFrameToggle.Value)
+end)
+
+-- ============================================================================
+-- FARMING TAB
+-- ============================================================================
 
 if BossFarm and AutoFarmHandler then
     local FarmLeft = Tabs.Farming:AddLeftGroupbox('Auto Summon & Pickup')
     local FarmRight = Tabs.Farming:AddRightGroupbox('Boss Farm')
 
-    FarmLeft:AddToggle('AutoPickupToggle', { Text = 'Auto Pickup Items', Default = Config.AutoPickup, Callback = function(val) Config.AutoPickup = val SaveConfig() AutoFarmHandler.togglePickup(val) end })
-    FarmLeft:AddToggle('AutoSummonToggle', { Text = 'Auto Fruit Summoning', Default = Config.AutoSummon, Callback = function(val) Config.AutoSummon = val SaveConfig() AutoFarmHandler.toggleSummon(val) end }):AddKeyPicker('AutoSummonKey', { Default = 'P', Text = 'Toggle Summon', Mode = 'Toggle' })
-    Options.AutoSummonKey:OnClick(function() Toggles.AutoSummonToggle:SetValue(not Toggles.AutoSummonToggle.Value) end)
+    FarmLeft:AddToggle('AutoPickupToggle', {
+        Text = 'Auto Pickup Items',
+        Default = Config.AutoPickup,
+        Callback = function(val)
+            Config.AutoPickup = val
+            SaveConfig()
+            AutoFarmHandler.togglePickup(val)
+        end
+    })
+
+    FarmLeft:AddToggle('AutoSummonToggle', {
+        Text = 'Auto Fruit Summoning',
+        Default = Config.AutoSummon,
+        Callback = function(val)
+            Config.AutoSummon = val
+            SaveConfig()
+            AutoFarmHandler.toggleSummon(val)
+        end
+    }):AddKeyPicker('AutoSummonKey', {
+        Default = 'P',
+        Text = 'Toggle Summon',
+        Mode = 'Toggle'
+    })
+
+    Options.AutoSummonKey:OnClick(function()
+        Toggles.AutoSummonToggle:SetValue(not Toggles.AutoSummonToggle.Value)
+    end)
     
     FarmLeft:AddToggle('ServerHopDanger', { 
         Text = 'Server Hop On Danger', 
@@ -385,10 +543,20 @@ if BossFarm and AutoFarmHandler then
         end 
     })
 
-    FarmLeft:AddSlider('PickupRange', { Text = 'Pickup Range', Default = 50, Min = 10, Max = 100, Rounding = 0, Callback = function(val) AutoFarmHandler.Settings.PickupRange = val end })
+    FarmLeft:AddSlider('PickupRange', {
+        Text = 'Pickup Range',
+        Default = 50,
+        Min = 10,
+        Max = 100,
+        Rounding = 0,
+        Callback = function(val)
+            AutoFarmHandler.Settings.PickupRange = val
+        end
+    })
     
     -- Debugging Section in Auto Farm
-    FarmLeft:AddLabel("Debug & Testing")
+    FarmLeft:AddLabel("Debug & Testing"):AddToolTip("Tools to test queue_on_teleport")
+    
     FarmLeft:AddButton('Force Server Hop (Danger)', function() 
         print("[PuppyHub] Manual Trigger: Simulating Danger & Hopping...")
         if AutoFarmHandler and AutoFarmHandler.executeServerHop then
@@ -397,39 +565,221 @@ if BossFarm and AutoFarmHandler then
             warn("[PuppyHub] AutoFarmHandler or executeServerHop missing!")
         end
     end)
+    
+    FarmLeft:AddButton('Test Queue Teleport', function()
+        print("[PuppyHub] Testing queue_on_teleport...")
+        if queue_on_teleport then
+            queue_on_teleport('print("--> [PuppyHub] QUEUE_ON_TELEPORT SUCCESSFUL! <--")')
+            print("[PuppyHub] Script queued. Check console after teleport.")
+        else
+            warn("[PuppyHub] queue_on_teleport is NOT supported by this executor.")
+        end
+    end)
 
-    FarmRight:AddToggle('BossFarmEnabled', { Text = 'Enable Boss Farm', Default = false, Callback = function(val) BossFarm.Settings.Enabled = val if val then BossFarm.start() else BossFarm.stop() end end })
-    FarmRight:AddDropdown('BossSelection', { Values = BossFarm.bossDatabase, Default = 1, Multi = true, Text = 'Select Bosses', Callback = function(val) BossFarm.Settings.SelectedBosses = val end })
-    FarmRight:AddToggle('ServerHopBoss', { Text = 'Hop If No Boss', Default = false, Callback = function(val) BossFarm.Settings.ServerHopIfNoBoss = val end })
-    FarmRight:AddToggle('ServerHopChakra', { Text = 'Hop On Chakra Sense', Default = false, Callback = function(val) BossFarm.Settings.ServerHopIfChakraSense = val end })
+    FarmRight:AddToggle('BossFarmEnabled', {
+        Text = 'Enable Boss Farm',
+        Default = false,
+        Callback = function(val)
+            BossFarm.Settings.Enabled = val
+            if val then
+                BossFarm.start()
+            else
+                BossFarm.stop()
+            end
+        end
+    })
+
+    FarmRight:AddDropdown('BossSelection', {
+        Values = BossFarm.bossDatabase,
+        Default = 1,
+        Multi = true,
+        Text = 'Select Bosses',
+        Callback = function(val)
+            BossFarm.Settings.SelectedBosses = val
+        end
+    })
+
+    FarmRight:AddToggle('ServerHopBoss', {
+        Text = 'Hop If No Boss',
+        Default = false,
+        Callback = function(val)
+            BossFarm.Settings.ServerHopIfNoBoss = val
+        end
+    })
+
+    FarmRight:AddToggle('ServerHopChakra', {
+        Text = 'Hop On Chakra Sense',
+        Default = false,
+        Callback = function(val)
+            BossFarm.Settings.ServerHopIfChakraSense = val
+        end
+    })
 end
 
 -- ============================================================================
--- VISUALS
+-- VISUALS TAB
 -- ============================================================================
+
 local PlayerGroup = Tabs.Visuals:AddLeftGroupbox('Player ESP')
 local ItemGroup = Tabs.Visuals:AddRightGroupbox('World ESP')
 local MiscGroup = Tabs.Visuals:AddLeftGroupbox('Misc')
 
-PlayerGroup:AddToggle('PlayerESP', { Text = 'Enable Player ESP', Default = false, Callback = function(val) if PlayerESPHandler then if val then PlayerESPHandler:enable() else PlayerESPHandler:disable() end end end })
-PlayerGroup:AddToggle('ObserveUI', { Text = 'Observe UI', Default = false, Callback = function(val) if ObserveUI then if val then ObserveUI:enable() else ObserveUI:disable() end end end })
-PlayerGroup:AddToggle('ChatLogs', { Text = 'Chat Logs', Default = false, Callback = function(val) if ChatLog then if val then ChatLog:enable() else ChatLog:disable() end end end })
+PlayerGroup:AddToggle('PlayerESP', {
+    Text = 'Enable Player ESP',
+    Default = false,
+    Callback = function(val)
+        if PlayerESPHandler then
+            if val then
+                PlayerESPHandler:enable()
+            else
+                PlayerESPHandler:disable()
+            end
+        end
+    end
+})
 
-ItemGroup:AddToggle('MobESP', { Text = 'Mob ESP (Combat)', Default = false, Callback = function(val) if MobESPHandler then MobESPHandler:toggleMobs(val) end end })
-ItemGroup:AddToggle('NpcESP', { Text = 'NPC ESP (Dialog)', Default = false, Callback = function(val) if MobESPHandler then MobESPHandler:toggleNPCs(val) end end })
+PlayerGroup:AddToggle('ObserveUI', {
+    Text = 'Observe UI',
+    Default = false,
+    Callback = function(val)
+        if ObserveUI then
+            if val then
+                ObserveUI:enable()
+            else
+                ObserveUI:disable()
+            end
+        end
+    end
+})
+
+PlayerGroup:AddToggle('ChatLogs', {
+    Text = 'Chat Logs',
+    Default = false,
+    Callback = function(val)
+        if ChatLog then
+            if val then
+                ChatLog:enable()
+            else
+                ChatLog:disable()
+            end
+        end
+    end
+})
+
+-- Item Group
+ItemGroup:AddToggle('MobESP', {
+    Text = 'Mob ESP (Combat)',
+    Default = false,
+    Callback = function(val)
+        if MobESPHandler then
+            MobESPHandler:toggleMobs(val)
+        end
+    end
+})
+
+ItemGroup:AddToggle('NpcESP', {
+    Text = 'NPC ESP (Dialog)',
+    Default = false,
+    Callback = function(val)
+        if MobESPHandler then
+            MobESPHandler:toggleNPCs(val)
+        end
+    end
+})
+
 ItemGroup:AddDivider()
-ItemGroup:AddToggle('TrinketESP', { Text = 'Trinket ESP', Default = false, Callback = function(val) if ItemESPHandler then ItemESPHandler:toggleCategory("Trinket", val) end end })
-ItemGroup:AddToggle('FruitESP', { Text = 'Fruit ESP', Default = false, Callback = function(val) if ItemESPHandler then ItemESPHandler:toggleCategory("Fruit", val) end end })
-ItemGroup:AddToggle('GemESP', { Text = 'Gem ESP', Default = false, Callback = function(val) if ItemESPHandler then ItemESPHandler:toggleCategory("Gem", val) end end })
-ItemGroup:AddToggle('ChakraESP', { Text = 'Chakra Point ESP', Default = false, Callback = function(val) if ChakraESPHandler then if val then ChakraESPHandler:enable() else ChakraESPHandler:disable() end end end })
-ItemGroup:AddToggle('CorruptedESP', { Text = 'Corrupted Point ESP', Default = false, Callback = function(val) if CorruptedESPHandler then if val then CorruptedESPHandler:enable() else CorruptedESPHandler:disable() end end end })
 
-MiscGroup:AddToggle('TransTrailToggle', { Text = 'Trans Flag Trail', Default = false, Callback = function(val) if TransTrail then if val then TransTrail:enable() else TransTrail:disable() end end end })
-MiscGroup:AddToggle('NoFogToggle', { Text = 'No Fog', Default = false, Callback = function(val) if NoFog then if val then NoFog:enable() else NoFog:disable() end end end })
+ItemGroup:AddToggle('TrinketESP', {
+    Text = 'Trinket ESP',
+    Default = false,
+    Callback = function(val)
+        if ItemESPHandler then
+            ItemESPHandler:toggleCategory("Trinket", val)
+        end
+    end
+})
+
+ItemGroup:AddToggle('FruitESP', {
+    Text = 'Fruit ESP',
+    Default = false,
+    Callback = function(val)
+        if ItemESPHandler then
+            ItemESPHandler:toggleCategory("Fruit", val)
+        end
+    end
+})
+
+ItemGroup:AddToggle('GemESP', {
+    Text = 'Gem ESP',
+    Default = false,
+    Callback = function(val)
+        if ItemESPHandler then
+            ItemESPHandler:toggleCategory("Gem", val)
+        end
+    end
+})
+
+ItemGroup:AddToggle('ChakraESP', {
+    Text = 'Chakra Point ESP',
+    Default = false,
+    Callback = function(val)
+        if ChakraESPHandler then
+            if val then
+                ChakraESPHandler:enable()
+            else
+                ChakraESPHandler:disable()
+            end
+        end
+    end
+})
+
+ItemGroup:AddToggle('CorruptedESP', {
+    Text = 'Corrupted Point ESP',
+    Default = false,
+    Callback = function(val)
+        if CorruptedESPHandler then
+            if val then
+                CorruptedESPHandler:enable()
+            else
+                CorruptedESPHandler:disable()
+            end
+        end
+    end
+})
+
+-- Misc Group
+MiscGroup:AddToggle('TransTrailToggle', {
+    Text = 'Trans Flag Trail',
+    Default = false,
+    Callback = function(val)
+        if TransTrail then
+            if val then
+                TransTrail:enable()
+            else
+                TransTrail:disable()
+            end
+        end
+    end
+})
+
+MiscGroup:AddToggle('NoFogToggle', {
+    Text = 'No Fog',
+    Default = false,
+    Callback = function(val)
+        if NoFog then
+            if val then
+                NoFog:enable()
+            else
+                NoFog:disable()
+            end
+        end
+    end
+})
 
 -- ============================================================================
--- SERVER BROWSER
+-- SERVER BROWSER TAB
 -- ============================================================================
+
 local ServerGroup = Tabs.Servers:AddLeftGroupbox('Server Browser (API)')
 local GAME_ID = 10266164381 -- Defined locally for fetch
 
@@ -528,13 +878,28 @@ end
 ServerGroup:AddButton('Refresh Servers', fetchServers)
 
 -- ============================================================================
--- INIT
+-- INIT & SETTINGS TAB
 -- ============================================================================
 local MenuGroup = Tabs.Settings:AddLeftGroupbox('Menu')
-MenuGroup:AddButton('Unload', function() StopMovementLoops() Library:Unload() end)
-MenuGroup:AddLabel('Menu bind'):AddKeyPicker('MenuKeybind', { Default = 'Insert', NoUI = true, Text = 'Menu keybind' })
+
+MenuGroup:AddButton('Unload', function()
+    StopMovementLoops()
+    Library:Unload()
+end)
+
+MenuGroup:AddLabel('Menu bind'):AddKeyPicker('MenuKeybind', {
+    Default = 'Insert',
+    NoUI = true,
+    Text = 'Menu keybind'
+})
+
 Library.ToggleKeybind = Options.MenuKeybind
-ThemeManager:SetLibrary(Library) SaveManager:SetLibrary(Library) ThemeManager:SetFolder('PuppyHub') SaveManager:SetFolder('PuppyHub/Bloodlines') ThemeManager:ApplyToTab(Tabs.Settings) SaveManager:BuildConfigSection(Tabs.Settings)
+ThemeManager:SetLibrary(Library)
+SaveManager:SetLibrary(Library)
+ThemeManager:SetFolder('PuppyHub')
+SaveManager:SetFolder('PuppyHub/Bloodlines')
+ThemeManager:ApplyToTab(Tabs.Settings)
+SaveManager:BuildConfigSection(Tabs.Settings)
 
 -- Initialize Loops
 StartMovementLoops()
