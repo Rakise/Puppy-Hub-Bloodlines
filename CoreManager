@@ -178,13 +178,12 @@ local function AutoLoginRoutine()
     -- 7. Resume Auto Farm
     if Config.AutoSummon and AutoFarmHandler then
         print("[PuppyHub] Resuming Auto Farm...")
-        Utils.notify("Resuming Auto Farm", 3)
-        -- We need to update the UI toggles if they exist, but for now trigger the logic
-        AutoFarmHandler.toggleSummon(true)
-        -- (Optional) Trigger pickup too if saved
+        -- We update the AutoPickup setting if it was true
         if Config.AutoPickup then
-            AutoFarmHandler.togglePickup(true)
+            AutoFarmHandler.Settings.AutoPickup = true
         end
+        -- Toggle summon ON
+        AutoFarmHandler.toggleSummon(true)
     end
 end
 
@@ -285,7 +284,7 @@ end
 -- ============================================================================
 -- MOVEMENT LOGIC
 -- ============================================================================
--- (Simplified for brevity, includes Fly, Noclip, Speed from previous version)
+
 local function checkPanicMode()
     if not State.PanicModeOption then State.IsPanicMode = false return end
     local found = false
@@ -336,18 +335,208 @@ RunService.RenderStepped:Connect(function()
     root.Velocity = velocity
 end)
 
--- ... (Rest of UI from previous context, abridged for file length limit but kept functional) ...
--- Add Visuals/Servers/Settings Tabs here (Standard Linoria implementation)
+task.spawn(function()
+    while true do
+        local char = LocalPlayer.Character
+        if State.Noclip and char and not State.IsPanicMode then
+            local hum = char:FindFirstChild("Humanoid")
+            local root = char:FindFirstChild("HumanoidRootPart")
+            if hum and root then
+                hum:ChangeState(Enum.HumanoidStateType.Jumping)
+                for _, v in ipairs(char:GetDescendants()) do
+                    if v:IsA("BasePart") then v.CanCollide = false end
+                end
+                local newpos = root.CFrame + hum.MoveDirection * State.NoclipTween
+                TweenService:Create(root, TweenInfo.new(0, Enum.EasingStyle.Linear), {CFrame = newpos}):Play()
+            end
+        else
+            if char then
+                local root = char:FindFirstChild("HumanoidRootPart")
+                if root then root.CanCollide = true end
+            end
+        end
+        task.wait()
+    end
+end)
 
+RunService.RenderStepped:Connect(function()
+    if State.CFrameSpeed and not State.IsPanicMode then
+        local char = LocalPlayer.Character
+        if char and char:FindFirstChild("HumanoidRootPart") and char:FindFirstChild("Humanoid") then
+            local moveDir = char.Humanoid.MoveDirection
+            local moveVec = moveDir * (State.CFrameSpeedValue / 10) 
+            char.HumanoidRootPart.CFrame = char.HumanoidRootPart.CFrame + moveVec
+            char.HumanoidRootPart.Velocity = Vector3.new(0, char.HumanoidRootPart.Velocity.Y, 0)
+        end
+    end
+end)
+
+
+-- ============================================================================
+-- VISUALS TAB
+-- ============================================================================
+local PlayerGroup = Tabs.Visuals:AddLeftGroupbox('Player ESP')
+local ItemGroup = Tabs.Visuals:AddRightGroupbox('World ESP')
+local MiscGroup = Tabs.Visuals:AddLeftGroupbox('Misc')
+
+PlayerGroup:AddToggle('PlayerESP', {
+    Text = 'Enable Player ESP', Default = false,
+    Tooltip = 'Shows players, weapons, and health.',
+    Callback = function(val)
+        if PlayerESPHandler then
+            if val then PlayerESPHandler:enable() else PlayerESPHandler:disable() end
+        end
+    end
+})
+
+PlayerGroup:AddToggle('ObserveUI', {
+    Text = 'Observe UI', Default = false,
+    Callback = function(val)
+        if ObserveUI then if val then ObserveUI:enable() else ObserveUI:disable() end end
+    end
+})
+
+PlayerGroup:AddToggle('ChatLogs', {
+    Text = 'Chat Logs', Default = false,
+    Callback = function(val)
+        if ChatLog then if val then ChatLog:enable() else ChatLog:disable() end end
+    end
+})
+
+ItemGroup:AddToggle('MobESP', {
+    Text = 'Mob ESP (Combat)', Default = false,
+    Callback = function(val) if MobESPHandler then MobESPHandler:toggleMobs(val) end end
+})
+ItemGroup:AddToggle('NpcESP', {
+    Text = 'NPC ESP (Dialog)', Default = false,
+    Callback = function(val) if MobESPHandler then MobESPHandler:toggleNPCs(val) end end
+})
+ItemGroup:AddDivider()
+ItemGroup:AddToggle('TrinketESP', {
+    Text = 'Trinket ESP', Default = false,
+    Callback = function(val) if ItemESPHandler then ItemESPHandler:toggleCategory("Trinket", val) end end
+})
+ItemGroup:AddToggle('FruitESP', {
+    Text = 'Fruit ESP', Default = false,
+    Callback = function(val) if ItemESPHandler then ItemESPHandler:toggleCategory("Fruit", val) end end
+})
+ItemGroup:AddToggle('GemESP', {
+    Text = 'Gem ESP', Default = false,
+    Callback = function(val) if ItemESPHandler then ItemESPHandler:toggleCategory("Gem", val) end end
+})
+ItemGroup:AddToggle('ChakraESP', {
+    Text = 'Chakra Point ESP', Default = false,
+    Callback = function(val) if ChakraESPHandler then if val then ChakraESPHandler:enable() else ChakraESPHandler:disable() end end end
+})
+ItemGroup:AddToggle('CorruptedESP', {
+    Text = 'Corrupted Point ESP', Default = false,
+    Callback = function(val) if CorruptedESPHandler then if val then CorruptedESPHandler:enable() else CorruptedESPHandler:disable() end end end
+})
+
+MiscGroup:AddToggle('TransTrailToggle', {
+    Text = 'Trans Flag Trail', Default = false,
+    Callback = function(val) if TransTrail then if val then TransTrail:enable() else TransTrail:disable() end end end
+})
+MiscGroup:AddToggle('NoFogToggle', {
+    Text = 'No Fog', Default = false,
+    Callback = function(val) if NoFog then if val then NoFog:enable() else NoFog:disable() end end end
+})
+
+
+-- ============================================================================
+-- API SERVER BROWSER
+-- ============================================================================
 local ServerGroup = Tabs.Servers:AddLeftGroupbox('Server Browser (API)')
+local GAME_ID = 10266164381
+
 local function joinServer(id)
     local events = ReplicatedStorage:FindFirstChild("Events")
     local dataEvent = events and events:FindFirstChild("DataEvent")
-    if dataEvent then dataEvent:FireServer("ServerTeleport", id, 14) end
+    if dataEvent then
+        print("[PuppyHub] Teleporting to server:", id)
+        dataEvent:FireServer("ServerTeleport", id, 14)
+    else
+        warn("[PuppyHub] Could not find DataEvent for teleport!")
+    end
 end
-ServerGroup:AddButton('Refresh Servers', function() 
-    -- Same logic as previous file
-end)
+
+local StatusLabel = ServerGroup:AddLabel("Click 'Refresh' to load servers.")
+local serverScroll = Library:Create('ScrollingFrame', {
+    Name = "ServerListScroll",
+    Size = UDim2.new(1, -4, 0, 400),
+    ZIndex = 6,
+    Parent = ServerGroup.Container,
+    BackgroundColor3 = Library.BackgroundColor,
+    BorderColor3 = Library.OutlineColor,
+    BorderMode = Enum.BorderMode.Inset,
+    ScrollBarThickness = 6,
+    ScrollBarImageColor3 = Library.AccentColor,
+})
+Library:Create('UIListLayout', {
+    Padding = UDim.new(0, 5),
+    FillDirection = Enum.FillDirection.Vertical,
+    SortOrder = Enum.SortOrder.LayoutOrder,
+    HorizontalAlignment = Enum.HorizontalAlignment.Center,
+    Parent = serverScroll,
+})
+
+local isFetching = false
+local function fetchServers()
+    if isFetching then return end
+    isFetching = true
+    for _, child in ipairs(serverScroll:GetChildren()) do
+        if child:IsA("TextButton") then child:Destroy() end
+    end
+    task.spawn(function()
+        local allServers = {}
+        local cursor = ""
+        local pageNum = 1
+        local continueFetching = true
+
+        while continueFetching do
+            StatusLabel:SetText("Fetching Page " .. pageNum .. "...")
+            local success, response = pcall(function()
+                local requestFunc = (syn and syn.request) or (http and http.request) or http_request or (fluxus and fluxus.request) or request
+                local url = string.format("https://roproxy-production-0200.up.railway.app/games/v1/games/%d/servers/0?sortOrder=2&excludeFullGames=false&limit=100", GAME_ID)
+                if cursor ~= "" then url = url .. "&cursor=" .. cursor end
+                if requestFunc then return requestFunc({Url = url, Method = "GET"}).Body else return game:HttpGet(url) end
+            end)
+            if not success or not response then StatusLabel:SetText("Failed to fetch page " .. pageNum) continueFetching = false break end
+            local jsonSuccess, data = pcall(HttpService.JSONDecode, HttpService, response)
+            if not jsonSuccess or not data or not data.data then StatusLabel:SetText("Failed to parse API data.") continueFetching = false break end
+            for _, s in ipairs(data.data) do table.insert(allServers, s) end
+            if data.nextPageCursor and data.nextPageCursor ~= "" then cursor = data.nextPageCursor pageNum = pageNum + 1 task.wait(0.1) else continueFetching = false end
+        end
+        
+        if #allServers > 0 then
+            StatusLabel:SetText("Sorting " .. #allServers .. " servers...")
+            table.sort(allServers, function(a, b) return (a.playing or 0) > (b.playing or 0) end)
+            StatusLabel:SetText(string.format("Loaded %d servers.", #allServers))
+            for _, server in ipairs(allServers) do
+                local text = string.format("%d/%d Plrs | FPS: %.0f | Ping: %d", server.playing, server.maxPlayers, server.fps or 0, server.ping or 0)
+                local btn = Library:Create('TextButton', { Parent = serverScroll, Text = text, Size = UDim2.new(1, -10, 0, 30), BackgroundColor3 = Library.MainColor, TextColor3 = Library.FontColor, Font = Library.Font, TextSize = 14, ZIndex = 10 })
+                Library:OnHighlight(btn, btn, { BorderColor3 = 'AccentColor' }, { BorderColor3 = 'OutlineColor' })
+                btn.MouseButton1Click:Connect(function() joinServer(server.id) end)
+            end
+            task.wait(0.1)
+            local layout = serverScroll:FindFirstChildOfClass("UIListLayout")
+            if layout then serverScroll.CanvasSize = UDim2.new(0, 0, 0, layout.AbsoluteContentSize.Y) end
+        else
+            StatusLabel:SetText("No servers found or API error.")
+        end
+        isFetching = false
+    end)
+end
+ServerGroup:AddButton('Refresh Servers', fetchServers)
+task.delay(1, fetchServers)
+
+-- ============================================================================
+-- UI SETTINGS & INIT
+-- ============================================================================
+local MenuGroup = Tabs.Settings:AddLeftGroupbox('Menu')
+MenuGroup:AddButton('Unload', function() Library:Unload() end)
+MenuGroup:AddLabel('Menu bind'):AddKeyPicker('MenuKeybind', { Default = 'Insert', NoUI = true, Text = 'Menu keybind' })
+Library.ToggleKeybind = Options.MenuKeybind
 
 ThemeManager:SetLibrary(Library)
 SaveManager:SetLibrary(Library)

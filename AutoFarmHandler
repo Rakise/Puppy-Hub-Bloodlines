@@ -1,8 +1,9 @@
 -- AutoFarmHandler.lua
 -- Handles Fruit Summoning Macro and Auto Pickup
 -- OPTIMIZED: Uses caching to prevent FPS drops
--- UPDATED: Fixed Recast Delay & Server Hop Crash
+-- UPDATED: Fixed Recast Delay (Hardcoded 16s) & Server Hop Crash
 -- EXPOSED: Safety Check & Server Hop for CoreManager
+-- FULL SCRIPT: Includes Clay Doll Defense, Pickup, and Server Hop
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -145,14 +146,83 @@ end
 AutoFarmHandler.executeServerHop = ServerHop.execute
 
 -- ============================================================================
--- SUMMON MACRO (Fixed Recast)
+-- CLAY DOLL DEFENSE LOGIC
 -- ============================================================================
 
-local function getCooldownsFolder()
-    local cooldowns = ReplicatedStorage:FindFirstChild("Cooldowns")
-    if cooldowns then return cooldowns:FindFirstChild(LocalPlayer.Name) end
-    return nil
+local function handleClayDoll(dollModel)
+    if State.IsDefending then return end
+    State.IsDefending = true
+    
+    print("[AutoFarm] ⚠️ CLAY DOLL DETECTED! Engaging Defense Protocol...")
+
+    local character = LocalPlayer.Character
+    local root = character and character:FindFirstChild("HumanoidRootPart")
+    
+    if not root then 
+        State.IsDefending = false 
+        return 
+    end
+
+    local originalAnchored = root.Anchored
+    root.Anchored = true
+    
+    if keypress then keypress(0x46) end -- F Key
+
+    -- Face the doll constantly
+    local defenseLoop = RunService.Heartbeat:Connect(function()
+        if not dollModel or not dollModel.Parent then return end
+        local dollRoot = dollModel:FindFirstChild("HumanoidRootPart") or dollModel.PrimaryPart
+        if dollRoot and root then
+            local lookPos = Vector3.new(dollRoot.Position.X, root.Position.Y, dollRoot.Position.Z)
+            root.CFrame = CFrame.lookAt(root.Position, lookPos)
+        end
+    end)
+
+    -- Wait for doll to die or disappear
+    while dollModel and dollModel.Parent do
+        local hum = dollModel:FindFirstChild("Humanoid")
+        if hum and hum.Health <= 0 then break end
+        task.wait(0.1)
+    end
+
+    if defenseLoop then defenseLoop:Disconnect() end
+    if keyrelease then keyrelease(0x46) end
+    if root then root.Anchored = originalAnchored end
+
+    print("[AutoFarm] ✅ Clay Doll neutralized. Resuming farm.")
+    State.IsDefending = false
 end
+
+local function startClayDollWatcher()
+    if State.Connections.ClayDoll then return end
+    State.Connections.ClayDoll = Workspace.ChildAdded:Connect(function(child)
+        task.delay(0.5, function()
+            if not child.Parent then return end
+            if child:IsA("Model") and child:FindFirstChild("Humanoid") then
+                if Players:GetPlayerFromCharacter(child) then return end
+                local myRoot = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+                if myRoot then
+                    local targetRoot = child:FindFirstChild("HumanoidRootPart") or child.PrimaryPart
+                    if targetRoot then
+                        local dist = (myRoot.Position - targetRoot.Position).Magnitude
+                        if dist < 30 then handleClayDoll(child) end
+                    end
+                end
+            end
+        end)
+    end)
+end
+
+local function stopClayDollWatcher()
+    if State.Connections.ClayDoll then
+        State.Connections.ClayDoll:Disconnect()
+        State.Connections.ClayDoll = nil
+    end
+end
+
+-- ============================================================================
+-- SUMMON MACRO (Hardcoded 16s Loop)
+-- ============================================================================
 
 local function clickSkillSlot()
     local clientGui = PlayerGui:FindFirstChild("ClientGui")
@@ -182,49 +252,36 @@ end
 
 local function summonLoop()
     while AutoFarmHandler.Settings.AutoSummon do
-        if State.IsDefending or State.IsHopping then task.wait(0.5) continue end
+        if State.IsDefending or State.IsHopping then 
+            task.wait(0.5) 
+            continue 
+        end
 
         local success = clickSkillSlot()
         
         if success then
-            local cooldowns = getCooldownsFolder()
-            local skillCooldown = nil
-            local t = 0
-            -- Wait for cooldown to appear
-            while t < 5 do
-                if cooldowns then
-                    for _, cd in ipairs(cooldowns:GetChildren()) do
-                        if string.find(string.lower(cd.Name), "fruit summoning") then
-                            skillCooldown = cd 
-                            break
-                        end
-                    end
-                end
-                if skillCooldown then break end
-                t = t + 0.5
-                task.wait(0.5)
+            -- Cooldown is exactly 16 seconds
+            -- No folder checking, just a simple wait loop
+            print("[AutoFarm] Summon used. Waiting 16s cooldown...")
+            
+            -- Using a loop for the wait so we can interrupt if settings change
+            for i = 1, 160 do
+                if not AutoFarmHandler.Settings.AutoSummon then return end
+                task.wait(0.1)
             end
             
-            if skillCooldown then
-                -- Wait for cooldown to finish
-                while skillCooldown.Parent do
-                    task.wait(0.5)
-                    if not AutoFarmHandler.Settings.AutoSummon then return end
-                end
-                -- FIX: Extra buffer for server processing
-                task.wait(1.5) 
-            else
-                -- Click likely failed or cooldown glitch
-                task.wait(2)
-            end
+            print("[AutoFarm] Cooldown finished.")
         else
+            -- Failed to find slot or click
             task.wait(2)
         end
     end
 end
 
--- ... (Include existing Auto Pickup, Clay Doll Defense logic here as previously defined) ...
--- Re-adding Pickup Logic for completeness of the file
+-- ============================================================================
+-- AUTO PICKUP LOGIC
+-- ============================================================================
+
 local function isValidPickup(obj)
     local detector = obj:FindFirstChild("ItemDetector")
     if detector and detector:IsA("ClickDetector") then return true end
@@ -281,9 +338,10 @@ function AutoFarmHandler.toggleSummon(val)
     AutoFarmHandler.Settings.AutoSummon = val
     if State.SummonThread then task.cancel(State.SummonThread) State.SummonThread = nil end
     if val then
-        if not AutoFarmHandler.Settings.AutoPickup then AutoFarmHandler.togglePickup(true) end
-        -- Start safety watcher (Internal or external, CoreManager now handles main safety check on join)
-        -- But we need a loop for runtime safety
+        -- Force AutoPickup ON by default
+        AutoFarmHandler.togglePickup(true)
+        
+        -- Start safety watcher (Internal loop)
         if State.SafetyThread then task.cancel(State.SafetyThread) end
         State.SafetyThread = task.spawn(function()
             while AutoFarmHandler.Settings.AutoSummon do
@@ -296,10 +354,14 @@ function AutoFarmHandler.toggleSummon(val)
             end
         end)
         
+        -- Start Clay Doll Watcher
+        startClayDollWatcher()
+        
         -- Start Summon Loop
         State.SummonThread = task.spawn(summonLoop)
     else
         if State.SafetyThread then task.cancel(State.SafetyThread) State.SafetyThread = nil end
+        stopClayDollWatcher()
     end
 end
 
