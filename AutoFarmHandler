@@ -180,7 +180,7 @@ local function clickSkillSlot()
             if slotText and string.find(string.lower(slotText.Text), "fruit summoning") then
                 print("[AutoFarm] MATCH FOUND in " .. slot.Name .. "! Attempting to equip...")
                 
-                -- 1. Equip Slot (Simulate full click: Down -> Up)
+                -- 1. Equip Slot (Simulate full click: Down -> Up) 
                 if firesignal then
                     print("[AutoFarm] Firing signal (MouseButton1Down)...")
                     firesignal(slot.MouseButton1Down)
