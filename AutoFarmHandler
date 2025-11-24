@@ -1,6 +1,8 @@
 -- AutoFarmHandler.lua
 -- Handles Fruit Summoning Macro and Auto Pickup
+-- OPTIMIZED: Uses caching to prevent FPS drops (No longer scans workspace every loop)
 -- Removed VirtualInputManager as requested
+
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
@@ -21,48 +23,99 @@ AutoFarmHandler.Settings = {
 }
 
 local State = {
-    PickupList = {},
+    PickupCache = {}, -- Stores valid items so we don't scan workspace repeatedly
     Connections = {},
     SummonThread = nil,
     PickupThread = nil
 }
 
 -- ============================================================================
--- AUTO PICKUP LOGIC
+-- CACHE & TRACKING LOGIC (OPTIMIZATION)
 -- ============================================================================
+
 local function isValidPickup(obj)
-    return obj:IsA("BasePart") 
-        and obj:FindFirstChild("Pickupable") 
-        and obj:FindFirstChild("ID")
+    -- Fast checks first
+    if not obj:IsA("BasePart") then return false end
+    
+    -- Check for required children
+    if obj:FindFirstChild("Pickupable") and obj:FindFirstChild("ID") then
+        return true
+    end
+    return false
 end
 
-local function doPickup()
-    local root = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
-    if not root then return end
-
-    local items = {}
-    for _, child in ipairs(Workspace:GetChildren()) do
-        if isValidPickup(child) then
-            table.insert(items, child)
-        end
+local function addToCache(child)
+    if isValidPickup(child) then
+        State.PickupCache[child] = true
     end
+end
+
+local function startTracking()
+    if State.Connections.Tracking then return end -- Already tracking
+
+    -- 1. Initial Scan (Do this ONCE, not every loop)
+    task.spawn(function()
+        for _, child in ipairs(Workspace:GetChildren()) do
+            addToCache(child)
+        end
+    end)
+
+    -- 2. Listen for new items dropping
+    State.Connections.Tracking = Workspace.ChildAdded:Connect(function(child)
+        -- Wait briefly for attributes/children (like ID) to replicate
+        task.delay(0.5, function()
+            if child.Parent then -- Ensure it wasn't deleted immediately
+                addToCache(child)
+            end
+        end)
+    end)
+
+    -- 3. Cleanup items when they are removed
+    State.Connections.Removing = Workspace.ChildRemoved:Connect(function(child)
+        if State.PickupCache[child] then
+            State.PickupCache[child] = nil
+        end
+    end)
+end
+
+local function stopTracking()
+    if State.Connections.Tracking then State.Connections.Tracking:Disconnect() end
+    if State.Connections.Removing then State.Connections.Removing:Disconnect() end
+    State.Connections = {}
+    State.PickupCache = {}
+end
+
+-- ============================================================================
+-- AUTO PICKUP LOOP
+-- ============================================================================
+
+local function doPickup()
+    local character = LocalPlayer.Character
+    local root = character and character:FindFirstChild("HumanoidRootPart")
+    if not root then return end
 
     local events = ReplicatedStorage:FindFirstChild("Events")
     local dataEvent = events and events:FindFirstChild("DataEvent")
     if not dataEvent then return end
 
-    for _, item in ipairs(items) do
+    local range = AutoFarmHandler.Settings.PickupRange
+
+    -- Iterate ONLY the cached items (Efficiency: High)
+    for item, _ in pairs(State.PickupCache) do
         if not AutoFarmHandler.Settings.AutoPickup then break end
-        
-        local rootNow = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
-        if not rootNow then break end
-        
-        local dist = (rootNow.Position - item.Position).Magnitude
-        if dist <= AutoFarmHandler.Settings.PickupRange then
-            if item:FindFirstChild("ID") then
-                dataEvent:FireServer('PickUp', item.ID.Value)
-                task.wait(AutoFarmHandler.Settings.PickupDelay)
+
+        if item.Parent then
+            local dist = (root.Position - item.Position).Magnitude
+            if dist <= range then
+                if item:FindFirstChild("ID") then
+                    dataEvent:FireServer('PickUp', item.ID.Value)
+                    -- Wait here to prevent spamming remote too fast
+                    task.wait(AutoFarmHandler.Settings.PickupDelay)
+                end
             end
+        else
+            -- Cleanup stale reference
+            State.PickupCache[item] = nil
         end
     end
 end
@@ -76,18 +129,23 @@ function AutoFarmHandler.togglePickup(val)
     end
 
     if val then
+        startTracking() -- Enable the event listeners
         State.PickupThread = task.spawn(function()
             while AutoFarmHandler.Settings.AutoPickup do
                 doPickup()
-                task.wait(0.5) 
+                task.wait(0.3) -- Loop speed
             end
+            stopTracking() -- Clean up when loop finishes
         end)
+    else
+        stopTracking()
     end
 end
 
 -- ============================================================================
 -- AUTO SUMMON MACRO
 -- ============================================================================
+
 local function getCooldownsFolder()
     local cooldowns = ReplicatedStorage:FindFirstChild("Cooldowns")
     if cooldowns then
@@ -109,7 +167,7 @@ local function clickSkillSlot()
     for _, slot in ipairs(loadout:GetChildren()) do
         if slot:IsA("ImageButton") and (string.find(slot.Name, "Slot") or string.find(slot.Name, "Key")) then
             local slotText = slot:FindFirstChild("SlotText")
-            if slotText and string.find(string.lower(slotText.Text), "fruit summoning") then
+            if slotText and string.find(string.lower(slotText.Text), "fruit summon") then
                 
                 -- 1. Equip Slot
                 if firesignal then
@@ -135,15 +193,16 @@ local function summonLoop()
         local success = clickSkillSlot()
         
         if success then
+            -- Wait logic for cooldown
             local cooldowns = getCooldownsFolder()
             local skillCooldown = nil
             local t = 0
             
-            -- Wait for cooldown to appear
+            -- Wait for cooldown to appear (Validation that skill was used)
             while t < 5 do
                 if cooldowns then
                     for _, cd in ipairs(cooldowns:GetChildren()) do
-                        if string.find(string.lower(cd.Name), "fruit summoning") then
+                        if string.find(string.lower(cd.Name), "fruit summon") then
                             skillCooldown = cd
                             break
                         end
@@ -165,6 +224,7 @@ local function summonLoop()
                 task.wait(2)
             end
         else
+            -- Slot not found or UI not ready
             task.wait(2)
         end
     end
