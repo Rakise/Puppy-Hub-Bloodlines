@@ -102,7 +102,7 @@ local function clickSkillSlot()
     local clientGui = PlayerGui:FindFirstChild("ClientGui")
     if not clientGui then return false end
     
-    local mainframe = clientGui:FindFirstChild("Mainframe")
+    local mainframe = clientGui:FindFirstChild("Mainframe") 
     if not mainframe then return false end
     
     local loadout = mainframe:FindFirstChild("Loadout")
