@@ -126,7 +126,7 @@ function ServerHop.join(serverId)
         -- Standard Bloodlines teleport implementation
         dataEvent:FireServer("ServerTeleport", serverId, 14)
     else
-        warn("[AutoFarm] DataEvent not found! Hop failed.")
+        warn("[AutoFarm] DataEvent not found! Hop failed.") 
     end
 end
 
