@@ -165,9 +165,9 @@ local function clickSkillSlot()
     if not loadout then return false end
     
     for _, slot in ipairs(loadout:GetChildren()) do
-        if slot:IsA("ImageButton") and (string.find(slot.Name, "Slot") or string.find(slot.Name, "Key")) then
+        if slot:IsA("ImageButton") and (string.find(slot.Name, "Slot") then
             local slotText = slot:FindFirstChild("SlotText")
-            if slotText and string.find(string.lower(slotText.Text), "fruit summon") then
+            if slotText and string.find(string.lower(slotText.Text), "fruit summoning") then
                 
                 -- 1. Equip Slot
                 if firesignal then
@@ -202,7 +202,7 @@ local function summonLoop()
             while t < 5 do
                 if cooldowns then
                     for _, cd in ipairs(cooldowns:GetChildren()) do
-                        if string.find(string.lower(cd.Name), "fruit summon") then
+                        if string.find(string.lower(cd.Name), "fruit summoning") then
                             skillCooldown = cd
                             break
                         end
