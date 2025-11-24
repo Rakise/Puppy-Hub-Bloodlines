@@ -1,7 +1,7 @@
 -- AutoFarmHandler.lua
 -- Handles Fruit Summoning Macro and Auto Pickup
 -- OPTIMIZED: Uses caching to prevent FPS drops
--- UPDATED: Added Manual Connection Management & Granular Hop Settings
+-- FIXED: "invalid key to next" crash by snapshotting table keys during pickup loop
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -346,11 +346,21 @@ local function doPickup()
     local root = character and character:FindFirstChild("HumanoidRootPart")
     if not root then return end
     local range = AutoFarmHandler.Settings.PickupRange
+    
+    -- Snapshot keys first to avoid "invalid key to next" during yields
+    local items = {}
     for item, _ in pairs(State.PickupCache) do
+        table.insert(items, item)
+    end
+    
+    for _, item in ipairs(items) do
         if not AutoFarmHandler.Settings.AutoPickup then break end
-        if item.Parent then
+        
+        -- Double check item validity (it might have been removed during a previous wait)
+        if State.PickupCache[item] and item.Parent then
             local itemPos = nil
             if item:IsA("BasePart") then itemPos = item.Position elseif item:IsA("Model") then itemPos = item:GetPivot().Position end
+            
             if itemPos and (root.Position - itemPos).Magnitude <= range then
                 local detector = item:FindFirstChild("ItemDetector")
                 if detector and detector:IsA("ClickDetector") then
@@ -358,7 +368,10 @@ local function doPickup()
                     task.wait(AutoFarmHandler.Settings.PickupDelay)
                 end
             end
-        else State.PickupCache[item] = nil end
+        elseif not item.Parent then
+             -- Cleanup if parent missing
+             State.PickupCache[item] = nil
+        end
     end
 end
 
