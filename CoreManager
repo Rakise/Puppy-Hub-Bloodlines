@@ -157,7 +157,6 @@ local function AutoLoginRoutine()
         local safe, reason = AutoFarmHandler.checkSafety()
         if not safe then
             print("[PuppyHub] ⚠️ Unsafe spawn: " .. tostring(reason) .. ". Hopping...")
-            Utils.notify("Spawn unsafe! Hopping...", 5)
             if AutoFarmHandler.executeServerHop then
                 AutoFarmHandler.executeServerHop()
                 return -- Stop everything, we are leaving
