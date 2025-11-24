@@ -1,7 +1,7 @@
 -- AutoFarmHandler.lua
 -- Handles Fruit Summoning Macro and Auto Pickup
 -- OPTIMIZED: Uses caching to prevent FPS drops (No longer scans workspace every loop)
--- Removed VirtualInputManager as requested
+-- DEBUG MODE: Prints added to troubleshoot Slot equipping
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -149,50 +149,70 @@ end
 local function getCooldownsFolder()
     local cooldowns = ReplicatedStorage:FindFirstChild("Cooldowns")
     if cooldowns then
-        return cooldowns:FindFirstChild(LocalPlayer.Name)  
-    end   
+        return cooldowns:FindFirstChild(LocalPlayer.Name)
+    end
     return nil
 end
 
 local function clickSkillSlot()
+    print("[AutoFarm] Debug: Looking for GUI...")
     local clientGui = PlayerGui:FindFirstChild("ClientGui")
-    if not clientGui then return false end
+    if not clientGui then print("[AutoFarm] Error: ClientGui not found") return false end
     
     local mainframe = clientGui:FindFirstChild("Mainframe")
-    if not mainframe then return false end
+    if not mainframe then print("[AutoFarm] Error: Mainframe not found") return false end
     
     local loadout = mainframe:FindFirstChild("Loadout")
-    if not loadout then return false end
+    if not loadout then print("[AutoFarm] Error: Loadout not found") return false end
     
+    print("[AutoFarm] Debug: Scanning slots...")
     for _, slot in ipairs(loadout:GetChildren()) do
-        if slot:IsA("ImageButton") and (string.find(slot.Name, "Slot") or string.find(slot.Name, "Key")) then
+        if string.find(slot.Name, "Slot") then
             local slotText = slot:FindFirstChild("SlotText")
+            
+            -- Debug print for every slot
+            if slotText then
+                print("[AutoFarm] Checking " .. slot.Name .. ": '" .. tostring(slotText.Text) .. "'")
+            else
+                print("[AutoFarm] Checking " .. slot.Name .. ": No SlotText found")
+            end
+
             if slotText and string.find(string.lower(slotText.Text), "fruit summoning") then
+                print("[AutoFarm] MATCH FOUND in " .. slot.Name .. "! Attempting to equip...")
                 
                 -- 1. Equip Slot
                 if firesignal then
+                    print("[AutoFarm] Firing signal (MouseButton1Up)...")
                     firesignal(slot.MouseButton1Up)
+                else
+                    print("[AutoFarm] Warning: firesignal not supported!")
                 end
                 
                 task.wait(0.2)
                 
                 -- 2. Use Skill
                 if mouse1click then
+                    print("[AutoFarm] Clicking mouse (mouse1click)...")
                     mouse1click()
+                else
+                    print("[AutoFarm] Warning: mouse1click not supported!")
                 end
                 
                 return true
             end
         end
     end
+    print("[AutoFarm] Failed: Could not find 'Fruit Summoning' in any slot.")
     return false
 end
 
 local function summonLoop()
+    print("[AutoFarm] Summon Loop Started")
     while AutoFarmHandler.Settings.AutoSummon do
         local success = clickSkillSlot()
         
         if success then
+            print("[AutoFarm] Click success. Waiting for cooldown...")
             -- Wait logic for cooldown
             local cooldowns = getCooldownsFolder()
             local skillCooldown = nil
@@ -208,7 +228,10 @@ local function summonLoop()
                         end
                     end
                 end
-                if skillCooldown then break end
+                if skillCooldown then 
+                    print("[AutoFarm] Cooldown detected!")
+                    break 
+                end
                 t = t + 0.5
                 task.wait(0.5)
             end
@@ -219,15 +242,19 @@ local function summonLoop()
                     task.wait(0.5)
                     if not AutoFarmHandler.Settings.AutoSummon then return end
                 end
+                print("[AutoFarm] Cooldown finished. Ready to summon again.")
                 task.wait(0.5) 
             else
+                print("[AutoFarm] No cooldown found (Did the skill fail to activate?). Waiting 2s.")
                 task.wait(2)
             end
         else
             -- Slot not found or UI not ready
+            print("[AutoFarm] Click failed or skill not found. Retrying in 2s.")
             task.wait(2)
         end
     end
+    print("[AutoFarm] Summon Loop Stopped")
 end
 
 function AutoFarmHandler.toggleSummon(val)
