@@ -123,13 +123,24 @@ function ServerHop.join(serverId)
     local dataEvent = events and events:FindFirstChild("DataEvent")
     if dataEvent then
         print("[AutoFarm] Firing ServerTeleport to: " .. tostring(serverId))
+        -- Standard Bloodlines teleport implementation
         dataEvent:FireServer("ServerTeleport", serverId, 14)
+        
+        -- Queue on teleport test (if supported)
+        if queue_on_teleport then
+            print("[AutoFarm] Queueing loadstring for next server...")
+            queue_on_teleport('loadstring(game:HttpGet("https://raw.githubusercontent.com/Rakise/Puppy-Hub-Bloodlines/refs/heads/main/CoreManager"))()')
+        end
+    else
+        warn("[AutoFarm] DataEvent not found! Hop failed.")
     end
 end
 
 function ServerHop.fetchServers()
     local allServers = {}
     local url = string.format("https://roproxy-production-0200.up.railway.app/games/v1/games/%d/servers/0?sortOrder=2&excludeFullGames=false&limit=100", GAME_ID)
+    
+    print("[AutoFarm-Debug] Fetching Server List from: " .. url)
     
     local success, response = pcall(function()
         local requestFunc = (syn and syn.request) or (http and http.request) or http_request or (fluxus and fluxus.request) or request
@@ -139,8 +150,13 @@ function ServerHop.fetchServers()
     if success and response then
         local jsonSuccess, data = pcall(HttpService.JSONDecode, HttpService, response)
         if jsonSuccess and data and data.data then
+            print("[AutoFarm-Debug] Servers found: " .. #data.data)
             for _, s in ipairs(data.data) do table.insert(allServers, s) end
+        else
+            warn("[AutoFarm-Debug] JSON Decode Failed or No Data:", response)
         end
+    else
+        warn("[AutoFarm-Debug] HTTP Request Failed.")
     end
     return allServers
 end
@@ -164,10 +180,13 @@ function ServerHop.execute()
             
             if #candidates > 0 then
                 local target = candidates[math.random(1, #candidates)]
+                print("[AutoFarm] Hopping to server: " .. target.id .. " (" .. target.playing .. " plrs)")
                 ServerHop.join(target.id)
             else
                 print("[AutoFarm] No suitable servers found.")
             end
+        else
+            warn("[AutoFarm] No servers returned from fetch.")
         end
         task.wait(2)
         State.IsHopping = false

@@ -386,6 +386,27 @@ if BossFarm and AutoFarmHandler then
     })
 
     FarmLeft:AddSlider('PickupRange', { Text = 'Pickup Range', Default = 50, Min = 10, Max = 100, Rounding = 0, Callback = function(val) AutoFarmHandler.Settings.PickupRange = val end })
+    
+    -- Debugging Section in Auto Farm
+    FarmLeft:AddLabel("Debug & Testing"):AddToolTip("Tools to test queue_on_teleport")
+    FarmLeft:AddButton('Force Server Hop (Danger)', function() 
+        print("[PuppyHub] Manual Trigger: Simulating Danger & Hopping...")
+        if AutoFarmHandler and AutoFarmHandler.executeServerHop then
+            AutoFarmHandler.executeServerHop()
+        else
+            warn("[PuppyHub] AutoFarmHandler or executeServerHop missing!")
+        end
+    end)
+    
+    FarmLeft:AddButton('Test Queue Teleport', function()
+        print("[PuppyHub] Testing queue_on_teleport...")
+        if queue_on_teleport then
+            queue_on_teleport('print("--> [PuppyHub] QUEUE_ON_TELEPORT SUCCESSFUL! <--")')
+            print("[PuppyHub] Script queued. Check console after teleport.")
+        else
+            warn("[PuppyHub] queue_on_teleport is NOT supported by this executor.")
+        end
+    end)
 
     FarmRight:AddToggle('BossFarmEnabled', { Text = 'Enable Boss Farm', Default = false, Callback = function(val) BossFarm.Settings.Enabled = val if val then BossFarm.start() else BossFarm.stop() end end })
     FarmRight:AddDropdown('BossSelection', { Values = BossFarm.bossDatabase, Default = 1, Multi = true, Text = 'Select Bosses', Callback = function(val) BossFarm.Settings.SelectedBosses = val end })
@@ -420,10 +441,17 @@ MiscGroup:AddToggle('NoFogToggle', { Text = 'No Fog', Default = false, Callback 
 -- SERVER BROWSER
 -- ============================================================================
 local ServerGroup = Tabs.Servers:AddLeftGroupbox('Server Browser (API)')
+local GAME_ID = 10266164381 -- Defined locally for fetch
+
 local function joinServer(id)
     local events = ReplicatedStorage:FindFirstChild("Events")
     local dataEvent = events and events:FindFirstChild("DataEvent")
-    if dataEvent then dataEvent:FireServer("ServerTeleport", id, 14) end
+    if dataEvent then 
+        print("[PuppyHub] Requesting Teleport to: " .. tostring(id))
+        dataEvent:FireServer("ServerTeleport", id, 14) 
+    else
+        warn("[PuppyHub] DataEvent not found! Cannot teleport.")
+    end
 end
 local StatusLabel = ServerGroup:AddLabel("Click 'Refresh' to load servers.")
 local serverScroll = Library:Create('ScrollingFrame', { Name = "ServerListScroll", Size = UDim2.new(1, -4, 0, 400), ZIndex = 6, Parent = ServerGroup.Container, BackgroundColor3 = Library.BackgroundColor, BorderColor3 = Library.OutlineColor, BorderMode = Enum.BorderMode.Inset, ScrollBarThickness = 6, ScrollBarImageColor3 = Library.AccentColor })
@@ -436,19 +464,58 @@ local function fetchServers()
         local cursor = ""
         local pageNum = 1
         local continueFetching = true
+        
         while continueFetching do
             StatusLabel:SetText("Fetching Page " .. pageNum .. "...")
+            local url = string.format("https://roproxy-production-0200.up.railway.app/games/v1/games/%d/servers/0?sortOrder=2&excludeFullGames=false&limit=100", GAME_ID)
+            if cursor ~= "" then url = url .. "&cursor=" .. cursor end
+            
+            print("[PuppyHub-Debug] Fetching URL: " .. url) -- DEBUG PRINT
+            
             local success, response = pcall(function()
-                local url = string.format("https://roproxy-production-0200.up.railway.app/games/v1/games/%d/servers/0?sortOrder=2&excludeFullGames=false&limit=100", GAME_ID)
-                if cursor ~= "" then url = url .. "&cursor=" .. cursor end
                 return game:HttpGet(url)
             end)
-            if not success or not response then StatusLabel:SetText("Failed to fetch page " .. pageNum) break end
+            
+            if not success then 
+                warn("[PuppyHub-Debug] HTTP Request Failed:", response) 
+                StatusLabel:SetText("HTTP Failed (Check Console)") 
+                break 
+            end
+            
+            if not response or #response == 0 then
+                warn("[PuppyHub-Debug] Empty Response!")
+                StatusLabel:SetText("Empty Response")
+                break
+            end
+            
+            print("[PuppyHub-Debug] Response Length: " .. #response)
+            
             local jsonSuccess, data = pcall(HttpService.JSONDecode, HttpService, response)
-            if not jsonSuccess or not data or not data.data then break end
+            
+            if not jsonSuccess then 
+                warn("[PuppyHub-Debug] JSON Decode Error:", data)
+                StatusLabel:SetText("JSON Error (Check Console)") 
+                break 
+            end
+            
+            if not data or not data.data then 
+                warn("[PuppyHub-Debug] Invalid JSON Structure (No 'data' field):", response)
+                break 
+            end
+            
+            print("[PuppyHub-Debug] Servers found on page " .. pageNum .. ": " .. #data.data)
+
             for _, s in ipairs(data.data) do table.insert(allServers, s) end
-            if data.nextPageCursor and data.nextPageCursor ~= "" then cursor = data.nextPageCursor pageNum = pageNum + 1 task.wait(0.1) else continueFetching = false end
+            
+            if data.nextPageCursor and data.nextPageCursor ~= "" then 
+                cursor = data.nextPageCursor 
+                pageNum = pageNum + 1 
+                task.wait(0.1) 
+            else 
+                continueFetching = false 
+            end
         end
+        
         if #allServers > 0 then
             StatusLabel:SetText("Sorting " .. #allServers .. " servers...")
             table.sort(allServers, function(a, b) return (a.playing or 0) > (b.playing or 0) end)
@@ -461,7 +528,11 @@ local function fetchServers()
             end
             local layout = serverScroll:FindFirstChildOfClass("UIListLayout")
             if layout then serverScroll.CanvasSize = UDim2.new(0, 0, 0, layout.AbsoluteContentSize.Y) end
-        else StatusLabel:SetText("No servers found.") end
+        else 
+            if StatusLabel.Text ~= "HTTP Failed (Check Console)" then
+                StatusLabel:SetText("No servers found (Check Logs).") 
+            end
+        end
     end)
 end
 ServerGroup:AddButton('Refresh Servers', fetchServers)
