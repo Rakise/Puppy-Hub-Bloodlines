@@ -397,16 +397,6 @@ if BossFarm and AutoFarmHandler then
             warn("[PuppyHub] AutoFarmHandler or executeServerHop missing!")
         end
     end)
-    
-    FarmLeft:AddButton('Test Queue Teleport', function()
-        print("[PuppyHub] Testing queue_on_teleport...")
-        if queue_on_teleport then
-            queue_on_teleport('print("--> [PuppyHub] QUEUE_ON_TELEPORT SUCCESSFUL! <--")')
-            print("[PuppyHub] Script queued. Check console after teleport.")
-        else
-            warn("[PuppyHub] queue_on_teleport is NOT supported by this executor.")
-        end
-    end)
 
     FarmRight:AddToggle('BossFarmEnabled', { Text = 'Enable Boss Farm', Default = false, Callback = function(val) BossFarm.Settings.Enabled = val if val then BossFarm.start() else BossFarm.stop() end end })
     FarmRight:AddDropdown('BossSelection', { Values = BossFarm.bossDatabase, Default = 1, Multi = true, Text = 'Select Bosses', Callback = function(val) BossFarm.Settings.SelectedBosses = val end })

@@ -125,12 +125,6 @@ function ServerHop.join(serverId)
         print("[AutoFarm] Firing ServerTeleport to: " .. tostring(serverId))
         -- Standard Bloodlines teleport implementation
         dataEvent:FireServer("ServerTeleport", serverId, 14)
-        
-        -- Queue on teleport test (if supported)
-        if queue_on_teleport then
-            print("[AutoFarm] Queueing loadstring for next server...")
-            queue_on_teleport('loadstring(game:HttpGet("https://raw.githubusercontent.com/Rakise/Puppy-Hub-Bloodlines/refs/heads/main/CoreManager"))()')
-        end
     else
         warn("[AutoFarm] DataEvent not found! Hop failed.")
     end
