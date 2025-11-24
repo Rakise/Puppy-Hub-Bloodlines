@@ -128,7 +128,7 @@ local function clickSkillSlot()
                 -- "fire mouse1click()"
                 if mouse1click then
                     mouse1click()
-                end
+                end 
                 
                 return true
             end
