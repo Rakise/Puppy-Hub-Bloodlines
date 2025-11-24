@@ -258,7 +258,7 @@ local function summonLoop()
                 end
                 print("[AutoFarm] Cooldown finished. Ready to summon again.")
                 task.wait(0.5) 
-            else
+            else 
                 print("[AutoFarm] No cooldown found (Did the skill fail to activate?). Waiting 2s.")
                 task.wait(2)
             end
