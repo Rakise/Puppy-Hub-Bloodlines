@@ -190,6 +190,8 @@ local function clickSkillSlot()
     return false
 end
 
+print("UPDATE 2 POURRA")
+
 local function summonLoop()
     while AutoFarmHandler.Settings.AutoSummon do
         local success = clickSkillSlot()
