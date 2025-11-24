@@ -388,7 +388,7 @@ if BossFarm and AutoFarmHandler then
     FarmLeft:AddSlider('PickupRange', { Text = 'Pickup Range', Default = 50, Min = 10, Max = 100, Rounding = 0, Callback = function(val) AutoFarmHandler.Settings.PickupRange = val end })
     
     -- Debugging Section in Auto Farm
-    FarmLeft:AddLabel("Debug & Testing"):AddToolTip("Tools to test queue_on_teleport")
+    FarmLeft:AddLabel("Debug & Testing")
     FarmLeft:AddButton('Force Server Hop (Danger)', function() 
         print("[PuppyHub] Manual Trigger: Simulating Danger & Hopping...")
         if AutoFarmHandler and AutoFarmHandler.executeServerHop then
