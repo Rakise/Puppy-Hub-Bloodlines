@@ -1,5 +1,6 @@
 -- AutoFarmHandler.lua
 -- Handles Fruit Summoning Macro and Auto Pickup
+-- Removed VirtualInputManager as requested
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
@@ -39,8 +40,6 @@ local function doPickup()
     local root = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
     if not root then return end
 
-    -- Scan workspace for items if list is empty or stale
-    -- (The original prompt used ChildAdded, but a loop scan is often more robust for robust for toggle)
     local items = {}
     for _, child in ipairs(Workspace:GetChildren()) do
         if isValidPickup(child) then
@@ -60,7 +59,6 @@ local function doPickup()
         
         local dist = (rootNow.Position - item.Position).Magnitude
         if dist <= AutoFarmHandler.Settings.PickupRange then
-            -- Attempt pickup
             if item:FindFirstChild("ID") then
                 dataEvent:FireServer('PickUp', item.ID.Value)
                 task.wait(AutoFarmHandler.Settings.PickupDelay)
@@ -81,7 +79,7 @@ function AutoFarmHandler.togglePickup(val)
         State.PickupThread = task.spawn(function()
             while AutoFarmHandler.Settings.AutoPickup do
                 doPickup()
-                task.wait(0.5) -- Scan interval
+                task.wait(0.5) 
             end
         end)
     end
@@ -102,33 +100,28 @@ local function clickSkillSlot()
     local clientGui = PlayerGui:FindFirstChild("ClientGui")
     if not clientGui then return false end
     
-    local mainframe = clientGui:FindFirstChild("Mainframe") 
+    local mainframe = clientGui:FindFirstChild("Mainframe")
     if not mainframe then return false end
     
     local loadout = mainframe:FindFirstChild("Loadout")
     if not loadout then return false end
     
-    -- Iterate slots to find Fruit Summoning
     for _, slot in ipairs(loadout:GetChildren()) do
         if slot:IsA("ImageButton") and (string.find(slot.Name, "Slot") or string.find(slot.Name, "Key")) then
             local slotText = slot:FindFirstChild("SlotText")
             if slotText and string.find(string.lower(slotText.Text), "fruit summon") then
-                -- Found the slot!
-                -- 1. Equip it (simulate click on the slot UI)
-                -- The prompt suggests: firesignal(btn.MouseButton1Up)
                 
+                -- 1. Equip Slot
                 if firesignal then
                     firesignal(slot.MouseButton1Up)
                 end
                 
-                -- Wait a moment for equip
                 task.wait(0.2)
                 
-                -- 2. Activate it (Mouse1Click)
-                -- "fire mouse1click()"
+                -- 2. Use Skill
                 if mouse1click then
                     mouse1click()
-                end 
+                end
                 
                 return true
             end
@@ -142,15 +135,13 @@ local function summonLoop()
         local success = clickSkillSlot()
         
         if success then
-            -- Wait for cooldown object to appear
             local cooldowns = getCooldownsFolder()
             local skillCooldown = nil
             local t = 0
             
-            -- Wait up to 5 seconds for cooldown to start
+            -- Wait for cooldown to appear
             while t < 5 do
                 if cooldowns then
-                    -- Name might be "Fruit Summoning" or similar
                     for _, cd in ipairs(cooldowns:GetChildren()) do
                         if string.find(string.lower(cd.Name), "fruit summon") then
                             skillCooldown = cd
@@ -163,21 +154,17 @@ local function summonLoop()
                 task.wait(0.5)
             end
             
-            -- If we found a cooldown, wait for it to disappear
+            -- Wait for cooldown to finish
             if skillCooldown then
-                -- Wait until destroyed
                 while skillCooldown.Parent do
                     task.wait(0.5)
                     if not AutoFarmHandler.Settings.AutoSummon then return end
                 end
-                -- Cooldown finished
-                task.wait(0.5) -- Slight delay before retrying
+                task.wait(0.5) 
             else
-                -- Maybe it failed or no cooldown applied? Wait a generic amount
                 task.wait(2)
             end
         else
-            -- Skill not found in loadout
             task.wait(2)
         end
     end
@@ -192,11 +179,9 @@ function AutoFarmHandler.toggleSummon(val)
     end
     
     if val then
-        -- Enforce auto pickup when summoning
         if not AutoFarmHandler.Settings.AutoPickup then
             AutoFarmHandler.togglePickup(true)
         end
-        
         State.SummonThread = task.spawn(summonLoop)
     end
 end
