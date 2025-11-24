@@ -1,7 +1,7 @@
 -- AutoFarmHandler.lua
 -- Handles Fruit Summoning Macro and Auto Pickup
 -- OPTIMIZED: Uses caching to prevent FPS drops
--- UPDATED: Added Manual Connection Management (No getconnections)
+-- UPDATED: Added Manual Connection Management & Granular Hop Settings
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -20,7 +20,8 @@ AutoFarmHandler.Settings = {
     AutoSummon = false,
     PickupRange = 50,
     PickupDelay = 0.3,
-    ServerHopOnDanger = true, 
+    ServerHopOnDanger = true, -- Master switch
+    ServerHopOnChakraSense = true, -- Specific switch for Chakra Sense
     DangerRadius = 300
 }
 
@@ -76,28 +77,34 @@ function AutoFarmHandler.checkSafety()
 
     for _, player in ipairs(Players:GetPlayers()) do
         if player ~= LocalPlayer then
-            -- 1. Distance
+            -- 1. Distance (Always checked if ServerHopOnDanger is master-enabled externally, 
+            -- but effectively checking here implies danger)
             if player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
                 local dist = (player.Character.HumanoidRootPart.Position - myRoot.Position).Magnitude
                 if dist <= AutoFarmHandler.Settings.DangerRadius then
                     return false, "Player Nearby (" .. player.Name .. ")"
                 end
             end
-            -- 2. Chakra Sense (Replicated)
-            if SETTINGS_FOLDER then
-                local pSettings = SETTINGS_FOLDER:FindFirstChild(player.Name)
-                if pSettings then
-                    local sVal = pSettings:FindFirstChild("CurrentSkill")
-                    if sVal and type(sVal.Value) == "string" and string.find(string.lower(sVal.Value), "sense") then
-                        return false, "Chakra Sense (" .. player.Name .. ")"
+            
+            -- 2. Chakra Sense (Conditional Check)
+            if AutoFarmHandler.Settings.ServerHopOnChakraSense then
+                -- Replicated Settings Check
+                if SETTINGS_FOLDER then
+                    local pSettings = SETTINGS_FOLDER:FindFirstChild(player.Name)
+                    if pSettings then
+                        local sVal = pSettings:FindFirstChild("CurrentSkill")
+                        if sVal and type(sVal.Value) == "string" and string.find(string.lower(sVal.Value), "sense") then
+                            return false, "Chakra Sense (" .. player.Name .. ")"
+                        end
                     end
                 end
-            end
-            -- 3. Chakra Sense (Tool)
-            if player.Character then
-                for _, tool in ipairs(player.Character:GetChildren()) do
-                    if tool:IsA("Tool") and string.find(string.lower(tool.Name), "sense") then
-                        return false, "Chakra Sense Tool (" .. player.Name .. ")"
+                
+                -- Tool Check
+                if player.Character then
+                    for _, tool in ipairs(player.Character:GetChildren()) do
+                        if tool:IsA("Tool") and string.find(string.lower(tool.Name), "sense") then
+                            return false, "Chakra Sense Tool (" .. player.Name .. ")"
+                        end
                     end
                 end
             end

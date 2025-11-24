@@ -165,11 +165,8 @@ local function StartMovementLoops()
                 for _, v in ipairs(char:GetDescendants()) do
                     if v:IsA("BasePart") then v.CanCollide = false end
                 end
-                local newpos = root.CFrame + hum.MoveDirection * State.NoclipTween
-                TweenService:Create(root, TweenInfo.new(0, Enum.EasingStyle.Linear), {CFrame = newpos}):Play()
             end
         else
-            -- Optional: Restore collision if needed, but Roblox handles this mostly on respawn/disable
             if char then
                local root = char:FindFirstChild("HumanoidRootPart")
                if root then root.CanCollide = true end
@@ -182,7 +179,12 @@ end
 -- PERSISTENCE & CONFIG
 -- ============================================================================
 
-local Config = { AutoSummon = false, AutoPickup = false }
+local Config = { 
+    AutoSummon = false, 
+    AutoPickup = false,
+    ServerHopOnDanger = true,
+    ServerHopOnChakraSense = true -- New Setting
+}
 
 local function SaveConfig()
     if writefile then
@@ -198,6 +200,12 @@ local function LoadConfig()
         if success and decoded then
             Config.AutoSummon = decoded.AutoSummon
             Config.AutoPickup = decoded.AutoPickup
+            if decoded.ServerHopOnDanger ~= nil then
+                Config.ServerHopOnDanger = decoded.ServerHopOnDanger
+            end
+            if decoded.ServerHopOnChakraSense ~= nil then
+                Config.ServerHopOnChakraSense = decoded.ServerHopOnChakraSense
+            end
         end
     end
 end
@@ -209,15 +217,12 @@ end
 local function RemoveForcefield()
     print("[PuppyHub] Removing Forcefield Sequence Initiated...")
     
-    -- 1. CRITICAL: Stop AutoFarm Threads/Connections Manually
     if AutoFarmHandler and AutoFarmHandler.emergencyStop then
         AutoFarmHandler.emergencyStop()
     end
-
-    -- 2. CRITICAL: Stop Movement/Core Loops Manually
+    
     StopMovementLoops()
 
-    -- 3. Execute TP (20 Studs + 0.3s Delay)
     local char = LocalPlayer.Character
     local root = char and char:FindFirstChild("HumanoidRootPart")
     if root then
@@ -225,22 +230,18 @@ local function RemoveForcefield()
         local originalPos = root.CFrame
         local tweenInfo = TweenInfo.new(0.5, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 
-        -- Tween Out
         local tweenForward = TweenService:Create(root, tweenInfo, {CFrame = forwardPos})
         tweenForward:Play()
         tweenForward.Completed:Wait()
         
-        -- Wait 0.3s
         task.wait(0.3)
         
-        -- Tween Back
         local tweenBack = TweenService:Create(root, tweenInfo, {CFrame = originalPos})
         tweenBack:Play()
         tweenBack.Completed:Wait()
         print("[PuppyHub] Forcefield removed. Resume operations.")
     end
 
-    -- 4. Restart Loops (Safe now)
     StartMovementLoops()
 end
 
@@ -280,8 +281,12 @@ local function AutoLoginRoutine()
     if AutoFarmHandler and AutoFarmHandler.checkSafety then
         local safe, reason = AutoFarmHandler.checkSafety()
         if not safe then
-            print("[PuppyHub] ⚠️ Unsafe: " .. tostring(reason) .. ". Hopping...")
-            if AutoFarmHandler.executeServerHop then AutoFarmHandler.executeServerHop() return end
+            if Config.ServerHopOnDanger then
+                print("[PuppyHub] ⚠️ Unsafe: " .. tostring(reason) .. ". Hopping...")
+                if AutoFarmHandler.executeServerHop then AutoFarmHandler.executeServerHop() return end
+            else
+                print("[PuppyHub] ⚠️ Unsafe: " .. tostring(reason) .. ". Server Hop disabled, staying.")
+            end
         end
     end
     
@@ -290,11 +295,21 @@ local function AutoLoginRoutine()
     if Config.AutoSummon and AutoFarmHandler then
         print("[PuppyHub] Resuming Auto Farm...")
         if Config.AutoPickup then AutoFarmHandler.Settings.AutoPickup = true end
+        
+        -- Sync settings
+        AutoFarmHandler.Settings.ServerHopOnDanger = Config.ServerHopOnDanger
+        AutoFarmHandler.Settings.ServerHopOnChakraSense = Config.ServerHopOnChakraSense
+        
         AutoFarmHandler.toggleSummon(true)
     end
 end
 
 LoadConfig()
+if AutoFarmHandler then
+    AutoFarmHandler.Settings.ServerHopOnDanger = Config.ServerHopOnDanger
+    AutoFarmHandler.Settings.ServerHopOnChakraSense = Config.ServerHopOnChakraSense
+end
+
 if Config.AutoSummon then task.spawn(AutoLoginRoutine) end
 
 -- ============================================================================
@@ -347,6 +362,29 @@ if BossFarm and AutoFarmHandler then
     FarmLeft:AddToggle('AutoPickupToggle', { Text = 'Auto Pickup Items', Default = Config.AutoPickup, Callback = function(val) Config.AutoPickup = val SaveConfig() AutoFarmHandler.togglePickup(val) end })
     FarmLeft:AddToggle('AutoSummonToggle', { Text = 'Auto Fruit Summoning', Default = Config.AutoSummon, Callback = function(val) Config.AutoSummon = val SaveConfig() AutoFarmHandler.toggleSummon(val) end }):AddKeyPicker('AutoSummonKey', { Default = 'P', Text = 'Toggle Summon', Mode = 'Toggle' })
     Options.AutoSummonKey:OnClick(function() Toggles.AutoSummonToggle:SetValue(not Toggles.AutoSummonToggle.Value) end)
+    
+    FarmLeft:AddToggle('ServerHopDanger', { 
+        Text = 'Server Hop On Danger', 
+        Default = Config.ServerHopOnDanger, 
+        Tooltip = 'If enabled, hops server if unsafe.',
+        Callback = function(val) 
+            Config.ServerHopOnDanger = val 
+            AutoFarmHandler.Settings.ServerHopOnDanger = val
+            SaveConfig() 
+        end 
+    })
+    
+    FarmLeft:AddToggle('HopOnSense', { 
+        Text = 'Hop On Chakra Sense', 
+        Default = Config.ServerHopOnChakraSense, 
+        Tooltip = 'Only applies if Server Hop On Danger is enabled.',
+        Callback = function(val) 
+            Config.ServerHopOnChakraSense = val 
+            AutoFarmHandler.Settings.ServerHopOnChakraSense = val
+            SaveConfig() 
+        end 
+    })
+
     FarmLeft:AddSlider('PickupRange', { Text = 'Pickup Range', Default = 50, Min = 10, Max = 100, Rounding = 0, Callback = function(val) AutoFarmHandler.Settings.PickupRange = val end })
 
     FarmRight:AddToggle('BossFarmEnabled', { Text = 'Enable Boss Farm', Default = false, Callback = function(val) BossFarm.Settings.Enabled = val if val then BossFarm.start() else BossFarm.stop() end end })
