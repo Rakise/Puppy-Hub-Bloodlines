@@ -1,9 +1,7 @@
 -- AutoFarmHandler.lua
 -- Handles Fruit Summoning Macro and Auto Pickup
 -- OPTIMIZED: Uses caching to prevent FPS drops
--- UPDATED: Fixed Recast Delay (Hardcoded 16s) & Server Hop Crash
--- EXPOSED: Safety Check & Server Hop for CoreManager
--- FULL SCRIPT: Includes Clay Doll Defense, Pickup, and Server Hop
+-- UPDATED: Added Manual Connection Management (No getconnections)
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -42,6 +40,33 @@ local State = {
 -- ============================================================================
 -- EXPOSED FUNCTIONS (For CoreManager)
 -- ============================================================================
+
+-- Function to Instantly Sever All Connections/Threads
+function AutoFarmHandler.emergencyStop()
+    print("[AutoFarm] 🚨 EMERGENCY STOP: Severing all connections/threads...")
+    
+    -- 1. Cancel Tasks
+    if State.SummonThread then task.cancel(State.SummonThread) State.SummonThread = nil end
+    if State.PickupThread then task.cancel(State.PickupThread) State.PickupThread = nil end
+    if State.SafetyThread then task.cancel(State.SafetyThread) State.SafetyThread = nil end
+    
+    -- 2. Disconnect Events
+    for name, conn in pairs(State.Connections) do
+        if conn and conn.Connected then 
+            conn:Disconnect() 
+        end
+    end
+    State.Connections = {}
+    
+    -- 3. Reset State Flags
+    State.IsDefending = false
+    State.IsHopping = false
+    -- We do NOT clear Settings here, so we can resume later if needed
+    -- But we clear cache to be safe
+    State.PickupCache = {}
+    
+    print("[AutoFarm] All systems halted.")
+end
 
 function AutoFarmHandler.checkSafety()
     -- Returns: isSafe (bool), reason (string/nil)
@@ -82,7 +107,7 @@ function AutoFarmHandler.checkSafety()
 end
 
 -- ============================================================================
--- HTTP SERVER HOP (Fixed: Limit 10)
+-- HTTP SERVER HOP
 -- ============================================================================
 local ServerHop = {}
 
@@ -97,7 +122,6 @@ end
 
 function ServerHop.fetchServers()
     local allServers = {}
-    -- FIX: Limit set to 10 to prevent crash
     local url = string.format("https://roproxy-production-0200.up.railway.app/games/v1/games/%d/servers/0?sortOrder=2&excludeFullGames=false&limit=100", GAME_ID)
     
     local success, response = pcall(function()
@@ -260,19 +284,13 @@ local function summonLoop()
         local success = clickSkillSlot()
         
         if success then
-            -- Cooldown is exactly 16 seconds
-            -- No folder checking, just a simple wait loop
             print("[AutoFarm] Summon used. Waiting 16s cooldown...")
-            
-            -- Using a loop for the wait so we can interrupt if settings change
             for i = 1, 160 do
                 if not AutoFarmHandler.Settings.AutoSummon then return end
                 task.wait(0.1)
             end
-            
             print("[AutoFarm] Cooldown finished.")
         else
-            -- Failed to find slot or click
             task.wait(2)
         end
     end
@@ -297,7 +315,9 @@ end
 local function stopTracking()
     if State.Connections.Tracking then State.Connections.Tracking:Disconnect() end
     if State.Connections.Removing then State.Connections.Removing:Disconnect() end
-    State.Connections = {} State.PickupCache = {}
+    State.Connections.Tracking = nil
+    State.Connections.Removing = nil
+    State.PickupCache = {}
 end
 
 local function doPickup()
@@ -338,10 +358,10 @@ function AutoFarmHandler.toggleSummon(val)
     AutoFarmHandler.Settings.AutoSummon = val
     if State.SummonThread then task.cancel(State.SummonThread) State.SummonThread = nil end
     if val then
-        -- Force AutoPickup ON by default
+        -- Force AutoPickup ON
         AutoFarmHandler.togglePickup(true)
         
-        -- Start safety watcher (Internal loop)
+        -- Start safety watcher
         if State.SafetyThread then task.cancel(State.SafetyThread) end
         State.SafetyThread = task.spawn(function()
             while AutoFarmHandler.Settings.AutoSummon do
@@ -354,10 +374,7 @@ function AutoFarmHandler.toggleSummon(val)
             end
         end)
         
-        -- Start Clay Doll Watcher
         startClayDollWatcher()
-        
-        -- Start Summon Loop
         State.SummonThread = task.spawn(summonLoop)
     else
         if State.SafetyThread then task.cancel(State.SafetyThread) State.SafetyThread = nil end
