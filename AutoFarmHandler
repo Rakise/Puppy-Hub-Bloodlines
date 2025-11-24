@@ -154,6 +154,8 @@ local function getCooldownsFolder()
     return nil
 end
 
+print("UPDATEN OIVO POURRA")
+
 local function clickSkillSlot()
     local clientGui = PlayerGui:FindFirstChild("ClientGui")
     if not clientGui then return false end
