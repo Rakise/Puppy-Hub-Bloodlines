@@ -555,7 +555,7 @@ if BossFarm and AutoFarmHandler then
     })
     
     -- Debugging Section in Auto Farm
-    FarmLeft:AddLabel("Debug & Testing"):AddToolTip("Tools to test queue_on_teleport")
+    FarmLeft:AddLabel("Debug & Testing")
     
     FarmLeft:AddButton('Force Server Hop (Danger)', function() 
         print("[PuppyHub] Manual Trigger: Simulating Danger & Hopping...")
