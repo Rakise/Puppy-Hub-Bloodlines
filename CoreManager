@@ -244,7 +244,7 @@ local function RemoveForcefield()
     StartMovementLoops()
 end
 
-function AutoLoginRoutine()
+local function AutoLoginRoutine()
     print("[PuppyHub] Starting Auto-Login Routine...")
     local clientGui = PlayerGui:WaitForChild("ClientGui", 30)
     if not clientGui then return end
@@ -266,6 +266,7 @@ function AutoLoginRoutine()
                     firesignal(continueBtn.MouseButton1Up)
                     task.wait(0.1)
                     firesignal(continueBtn.MouseButton1Click)
+                end
             end
         end
     end
