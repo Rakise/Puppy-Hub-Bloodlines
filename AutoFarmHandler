@@ -2,6 +2,8 @@
 -- Handles Fruit Summoning Macro and Auto Pickup
 -- OPTIMIZED: Uses caching to prevent FPS drops
 -- UPDATED: Uses ClickDetector (ItemDetector) for pickup instead of RemoteEvents
+-- UPDATED: Added Clay Doll Defense (Anchor + Face + Block)
+-- UPDATED: Added Player/Chakra Detection & Custom Server Hop
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -19,60 +21,372 @@ AutoFarmHandler.Settings = {
     AutoPickup = false,
     AutoSummon = false,
     PickupRange = 50,
-    PickupDelay = 0.3
+    PickupDelay = 0.3,
+    ServerHopOnDanger = true, -- New setting
+    DangerRadius = 300
 }
 
+local SAFE_SPOT = Vector3.new(-2950.580, 321.173, -275.704)
+local SETTINGS_FOLDER = ReplicatedStorage:FindFirstChild("Settings")
+
 local State = {
-    PickupCache = {}, -- Stores valid items so we don't scan workspace repeatedly
+    PickupCache = {},
     Connections = {},
     SummonThread = nil,
-    PickupThread = nil
+    PickupThread = nil,
+    SafetyThread = nil,
+    IsDefending = false,
+    IsHopping = false
 }
 
 -- ============================================================================
--- CACHE & TRACKING LOGIC (OPTIMIZATION)
+-- UTILS & TELEPORT (Required for Server Hop)
+-- ============================================================================
+local Utils = {}
+local Teleport = {}
+
+function Utils.log(msg) print("[AutoFarm] " .. tostring(msg)) end
+function Utils.notify(msg, dur) 
+    pcall(function()
+        game:GetService("StarterGui"):SetCore("SendNotification", {
+            Title = "AutoFarm"; Text = msg; Duration = dur or 3;
+        })
+    end)
+end
+function Utils.getInDanger() return State.IsDefending end -- Map defending state to danger
+
+function Teleport.toSafeSpot(continuous)
+    local char = LocalPlayer.Character
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    if not root then return end
+    
+    Utils.log("Teleporting to Safe Spot...")
+    if not continuous then
+        root.CFrame = CFrame.new(SAFE_SPOT)
+    else
+        -- Simple continuous enforcement
+        local conn = RunService.Heartbeat:Connect(function()
+            if root and root.Parent then root.CFrame = CFrame.new(SAFE_SPOT) end
+        end)
+        return conn
+    end
+end
+
+-- ============================================================================
+-- SERVER HOP SYSTEM (Provided Logic)
+-- ============================================================================
+local ServerHop = {}
+
+function ServerHop.execute()
+    if State.IsHopping then return end
+    State.IsHopping = true
+    
+    Utils.log("Initiating server hop...")
+    
+    -- Wait if in danger (Clay Doll Defense)
+    if Utils.getInDanger() then
+        Utils.log("In combat, waiting...")
+        Utils.notify("In combat! Waiting...", 3)
+        
+        local safeTp = Teleport.toSafeSpot(true) -- Continuous TP
+        
+        while Utils.getInDanger() do
+            task.wait(0.5)
+        end
+        
+        if safeTp then safeTp:Disconnect() end
+        Utils.log("Out of combat, proceeding...")
+        task.wait(1)
+    end
+    
+    -- Move to safe spot once before hopping
+    Teleport.toSafeSpot(false)
+    
+    for attempt = 1, 5 do
+        local success = pcall(function()
+            local playerGui = LocalPlayer:WaitForChild("PlayerGui", 5)
+            if not playerGui then return end
+            
+            local clientGui = playerGui:WaitForChild("ClientGui", 5)
+            if not clientGui then return end
+            
+            local list = ServerHop.findServerList(clientGui)
+            if not list then 
+                Utils.log("Could not find server list UI")
+                return 
+            end
+            
+            local validServers = ServerHop.getValidServers(list)
+            if #validServers == 0 then 
+                Utils.log("No valid servers found in list")
+                return 
+            end
+            
+            local randomServer = validServers[math.random(1, #validServers)]
+            Utils.log("Joining server with " .. tostring(randomServer.playerCount) .. " players")
+            
+            if firesignal then
+                firesignal(randomServer.button.MouseButton1Down)
+                task.wait(0.05)
+                firesignal(randomServer.button.MouseButton1Up)
+                task.wait(0.05)
+                firesignal(randomServer.button.MouseButton1Click)
+            else
+                Utils.log("firesignal not supported!")
+            end
+        end)
+        
+        task.wait(0.35)
+        
+        if attempt < 5 then
+            Utils.notify(string.format("Retry %d/5", attempt + 1), 0.5)
+        end
+    end
+    State.IsHopping = false
+end
+
+function ServerHop.findServerList(clientGui)
+    -- Try Mainframe path
+    local mainframe = clientGui:FindFirstChild("Mainframe")
+    if mainframe then
+        local rest = mainframe:FindFirstChild("Rest")
+        if rest then
+            local serverList = rest:FindFirstChild("ServerList")
+            if serverList then
+                local backdrop = serverList:FindFirstChild("BackDrop")
+                if backdrop then
+                    local list = backdrop:FindFirstChild("List")
+                    if list and #list:GetChildren() > 0 then
+                        return list
+                    end
+                end
+            end
+        end
+    end
+    
+    -- Try MenuScreen path
+    local menuScreen = clientGui:FindFirstChild("MenuScreen")
+    if menuScreen then
+        local serverList = menuScreen:FindFirstChild("ServerList")
+        if serverList then
+            local backdrop = serverList:FindFirstChild("BackDrop")
+            if backdrop then
+                return backdrop:FindFirstChild("List")
+            end
+        end
+    end
+    
+    return nil
+end
+
+function ServerHop.getValidServers(list)
+    local validServers = {}
+    
+    for _, frame in ipairs(list:GetChildren()) do
+        if frame:IsA("Frame") and frame.Name == "ServerTemplate" then
+            local playersLabel = frame:FindFirstChild("Players")
+            local joinButton = frame:FindFirstChild("JoinButton")
+            
+            if playersLabel and joinButton and joinButton:IsA("TextButton") then
+                local playerCount = tonumber(playersLabel.Text:match("%d+"))
+                
+                if playerCount and playerCount >= 10 and playerCount < 20 then -- Added < 20 check
+                    table.insert(validServers, {
+                        button = joinButton,
+                        playerCount = playerCount
+                    })
+                end
+            end
+        end
+    end
+    
+    return validServers
+end
+
+-- ============================================================================
+-- SAFETY MONITOR (Players & Chakra Sense)
+-- ============================================================================
+local function checkSurroundings()
+    if not AutoFarmHandler.Settings.ServerHopOnDanger then return end
+    if State.IsHopping then return end
+
+    local myChar = LocalPlayer.Character
+    local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
+    if not myRoot then return end
+
+    local shouldHop = false
+    local reason = ""
+
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer then
+            -- 1. Check Distance
+            if player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
+                local dist = (player.Character.HumanoidRootPart.Position - myRoot.Position).Magnitude
+                if dist <= AutoFarmHandler.Settings.DangerRadius then
+                    shouldHop = true
+                    reason = "Player Nearby (" .. math.floor(dist) .. " studs)"
+                    break
+                end
+            end
+
+            -- 2. Check Chakra Sense (ReplicatedStorage)
+            if SETTINGS_FOLDER then
+                local pSettings = SETTINGS_FOLDER:FindFirstChild(player.Name)
+                if pSettings then
+                    local sVal = pSettings:FindFirstChild("CurrentSkill")
+                    if sVal and type(sVal.Value) == "string" and string.find(string.lower(sVal.Value), "sense") then
+                        shouldHop = true
+                        reason = "Chakra Sense Detected (" .. player.Name .. ")"
+                        break
+                    end
+                end
+            end
+
+            -- 3. Check Chakra Sense (Tools/Attributes - Secondary)
+            if player.Character then
+                for _, tool in ipairs(player.Character:GetChildren()) do
+                    if tool:IsA("Tool") and string.find(string.lower(tool.Name), "sense") then
+                        shouldHop = true
+                        reason = "Chakra Sense Tool (" .. player.Name .. ")"
+                        break
+                    end
+                end
+            end
+        end
+    end
+
+    if shouldHop then
+        Utils.log("Danger Detected: " .. reason)
+        Utils.notify("Danger! Hopping...", 3)
+        
+        -- Stop Farming
+        AutoFarmHandler.Settings.AutoPickup = false
+        AutoFarmHandler.Settings.AutoSummon = false
+        
+        -- Cleanup Threads
+        if State.PickupThread then task.cancel(State.PickupThread) State.PickupThread = nil end
+        if State.SummonThread then task.cancel(State.SummonThread) State.SummonThread = nil end
+        if State.Connections.ClayDoll then State.Connections.ClayDoll:Disconnect() State.Connections.ClayDoll = nil end
+        
+        -- Execute Hop
+        ServerHop.execute()
+    end
+end
+
+local function startSafetyWatcher()
+    if State.SafetyThread then return end
+    State.SafetyThread = task.spawn(function()
+        while true do
+            checkSurroundings()
+            task.wait(1)
+        end
+    end)
+end
+
+local function stopSafetyWatcher()
+    if State.SafetyThread then 
+        task.cancel(State.SafetyThread)
+        State.SafetyThread = nil
+    end
+end
+
+-- ============================================================================
+-- CLAY DOLL DEFENSE LOGIC
+-- ============================================================================
+
+local function handleClayDoll(dollModel)
+    if State.IsDefending then return end
+    State.IsDefending = true
+    
+    print("[AutoFarm] ⚠️ CLAY DOLL DETECTED! Engaging Defense Protocol...")
+
+    local character = LocalPlayer.Character
+    local root = character and character:FindFirstChild("HumanoidRootPart")
+    
+    if not root then 
+        State.IsDefending = false 
+        return 
+    end
+
+    local originalAnchored = root.Anchored
+    root.Anchored = true
+    
+    if keypress then keypress(0x46) end -- F Key
+
+    local defenseLoop = RunService.Heartbeat:Connect(function()
+        if not dollModel or not dollModel.Parent then return end
+        local dollRoot = dollModel:FindFirstChild("HumanoidRootPart") or dollModel.PrimaryPart
+        if dollRoot and root then
+            local lookPos = Vector3.new(dollRoot.Position.X, root.Position.Y, dollRoot.Position.Z)
+            root.CFrame = CFrame.lookAt(root.Position, lookPos)
+        end
+    end)
+
+    while dollModel and dollModel.Parent do
+        local hum = dollModel:FindFirstChild("Humanoid")
+        if hum and hum.Health <= 0 then break end
+        task.wait(0.1)
+    end
+
+    if defenseLoop then defenseLoop:Disconnect() end
+    if keyrelease then keyrelease(0x46) end
+    if root then root.Anchored = originalAnchored end
+
+    print("[AutoFarm] ✅ Clay Doll neutralized. Resuming farm.")
+    State.IsDefending = false
+end
+
+local function startClayDollWatcher()
+    if State.Connections.ClayDoll then return end
+    State.Connections.ClayDoll = Workspace.ChildAdded:Connect(function(child)
+        task.delay(0.5, function()
+            if not child.Parent then return end
+            if child:IsA("Model") and child:FindFirstChild("Humanoid") then
+                if Players:GetPlayerFromCharacter(child) then return end
+                local myRoot = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+                if myRoot then
+                    local targetRoot = child:FindFirstChild("HumanoidRootPart") or child.PrimaryPart
+                    if targetRoot then
+                        local dist = (myRoot.Position - targetRoot.Position).Magnitude
+                        if dist < 30 then handleClayDoll(child) end
+                    end
+                end
+            end
+        end)
+    end)
+end
+
+local function stopClayDollWatcher()
+    if State.Connections.ClayDoll then
+        State.Connections.ClayDoll:Disconnect()
+        State.Connections.ClayDoll = nil
+    end
+end
+
+-- ============================================================================
+-- CACHE & TRACKING LOGIC
 -- ============================================================================
 
 local function isValidPickup(obj)
-    -- Updated: Detect via ItemDetector (ClickDetector) instead of ID/Pickupable
     local detector = obj:FindFirstChild("ItemDetector")
-    if detector and detector:IsA("ClickDetector") then
-        return true
-    end
+    if detector and detector:IsA("ClickDetector") then return true end
     return false
 end
 
 local function addToCache(child)
-    if isValidPickup(child) then
-        State.PickupCache[child] = true
-    end
+    if isValidPickup(child) then State.PickupCache[child] = true end
 end
 
 local function startTracking()
-    if State.Connections.Tracking then return end -- Already tracking
-
-    -- 1. Initial Scan (Do this ONCE, not every loop)
+    if State.Connections.Tracking then return end
     task.spawn(function()
-        for _, child in ipairs(Workspace:GetChildren()) do
-            addToCache(child)
-        end
+        for _, child in ipairs(Workspace:GetChildren()) do addToCache(child) end
     end)
-
-    -- 2. Listen for new items dropping
     State.Connections.Tracking = Workspace.ChildAdded:Connect(function(child)
-        -- Wait briefly for attributes/children to replicate
-        task.delay(0.5, function()
-            if child.Parent then -- Ensure it wasn't deleted immediately
-                addToCache(child)
-            end
-        end)
+        task.delay(0.5, function() if child.Parent then addToCache(child) end end)
     end)
-
-    -- 3. Cleanup items when they are removed
     State.Connections.Removing = Workspace.ChildRemoved:Connect(function(child)
-        if State.PickupCache[child] then
-            State.PickupCache[child] = nil
-        end
+        if State.PickupCache[child] then State.PickupCache[child] = nil end
     end)
 end
 
@@ -88,43 +402,33 @@ end
 -- ============================================================================
 
 local function doPickup()
+    if State.IsDefending or State.IsHopping then return end
+
     local character = LocalPlayer.Character
     local root = character and character:FindFirstChild("HumanoidRootPart")
     if not root then return end
 
     local range = AutoFarmHandler.Settings.PickupRange
 
-    -- Iterate ONLY the cached items (Efficiency: High)
     for item, _ in pairs(State.PickupCache) do
         if not AutoFarmHandler.Settings.AutoPickup then break end
 
         if item.Parent then
-            -- Determine item position safely (Handle both Parts and Models)
             local itemPos = nil
-            if item:IsA("BasePart") then
-                itemPos = item.Position
-            elseif item:IsA("Model") then
-                itemPos = item:GetPivot().Position
-            end
+            if item:IsA("BasePart") then itemPos = item.Position
+            elseif item:IsA("Model") then itemPos = item:GetPivot().Position end
 
             if itemPos then
                 local dist = (root.Position - itemPos).Magnitude
                 if dist <= range then
                     local detector = item:FindFirstChild("ItemDetector")
                     if detector and detector:IsA("ClickDetector") then
-                        if fireclickdetector then
-                            -- Uses exact distance to look legit
-                            fireclickdetector(detector, dist) 
-                            -- Debug print (Optional)
-                            -- print("[AutoFarm] Clicked detector at dist: " .. tostring(dist))
-                        end
-                        -- Wait here to prevent spamming click too fast
+                        if fireclickdetector then fireclickdetector(detector, dist) end
                         task.wait(AutoFarmHandler.Settings.PickupDelay)
                     end
                 end
             end
         else
-            -- Cleanup stale reference
             State.PickupCache[item] = nil
         end
     end
@@ -132,23 +436,22 @@ end
 
 function AutoFarmHandler.togglePickup(val)
     AutoFarmHandler.Settings.AutoPickup = val
-    
-    if State.PickupThread then
-        task.cancel(State.PickupThread)
-        State.PickupThread = nil
-    end
+    if State.PickupThread then task.cancel(State.PickupThread) State.PickupThread = nil end
 
     if val then
-        startTracking() -- Enable the event listeners
+        startTracking()
+        startSafetyWatcher() -- Start safety checks
         State.PickupThread = task.spawn(function()
             while AutoFarmHandler.Settings.AutoPickup do
                 doPickup()
-                task.wait(0.3) -- Loop speed
+                task.wait(0.3)
             end
-            stopTracking() -- Clean up when loop finishes
+            stopTracking()
+            stopSafetyWatcher()
         end)
     else
         stopTracking()
+        stopSafetyWatcher()
     end
 end
 
@@ -158,132 +461,86 @@ end
 
 local function getCooldownsFolder()
     local cooldowns = ReplicatedStorage:FindFirstChild("Cooldowns")
-    if cooldowns then
-        return cooldowns:FindFirstChild(LocalPlayer.Name)
-    end
+    if cooldowns then return cooldowns:FindFirstChild(LocalPlayer.Name) end
     return nil
 end
 
 local function clickSkillSlot()
-    print("[AutoFarm] Debug: Looking for GUI...")
     local clientGui = PlayerGui:FindFirstChild("ClientGui")
-    if not clientGui then print("[AutoFarm] Error: ClientGui not found") return false end
-    
+    if not clientGui then return false end
     local mainframe = clientGui:FindFirstChild("Mainframe")
-    if not mainframe then print("[AutoFarm] Error: Mainframe not found") return false end
-    
+    if not mainframe then return false end
     local loadout = mainframe:FindFirstChild("Loadout")
-    if not loadout then print("[AutoFarm] Error: Loadout not found") return false end
+    if not loadout then return false end
     
-    print("[AutoFarm] Debug: Scanning slots...")
     for _, slot in ipairs(loadout:GetChildren()) do
         if slot:IsA("ImageButton") and (string.find(slot.Name, "Slot") or string.find(slot.Name, "Key")) then
             local slotText = slot:FindFirstChild("SlotText")
-            
-            -- Debug print for every slot
-            if slotText then
-                print("[AutoFarm] Checking " .. slot.Name .. ": '" .. tostring(slotText.Text) .. "'")
-            else
-                print("[AutoFarm] Checking " .. slot.Name .. ": No SlotText found")
-            end
-
             if slotText and string.find(string.lower(slotText.Text), "fruit summoning") then
-                print("[AutoFarm] MATCH FOUND in " .. slot.Name .. "! Attempting to equip...")
-                
-                -- 1. Equip Slot (Simulate full click: Down -> Up)
                 if firesignal then
-                    print("[AutoFarm] Firing signal (MouseButton1Down)...")
                     firesignal(slot.MouseButton1Down)
-                    task.wait(0.05) -- Small realistic delay between press and release
-                    print("[AutoFarm] Firing signal (MouseButton1Up)...")
+                    task.wait(0.05)
                     firesignal(slot.MouseButton1Up)
-                else
-                    print("[AutoFarm] Warning: firesignal not supported!")
                 end
-                
-                print("[AutoFarm] Waiting 0.3s before activation...")
-                task.wait(0.3) -- Requested delay
-                
-                -- 2. Use Skill
-                if mouse1click then
-                    print("[AutoFarm] Clicking mouse (mouse1click)...")
-                    mouse1click()
-                else
-                    print("[AutoFarm] Warning: mouse1click not supported!")
-                end
-                
+                task.wait(0.3)
+                if mouse1click then mouse1click() end
                 return true
             end
         end
     end
-    print("[AutoFarm] Failed: Could not find 'Fruit Summoning' in any slot.")
     return false
 end
 
 local function summonLoop()
-    print("[AutoFarm] Summon Loop Started")
     while AutoFarmHandler.Settings.AutoSummon do
+        if State.IsDefending or State.IsHopping then task.wait(0.5) continue end
+
         local success = clickSkillSlot()
         
         if success then
-            print("[AutoFarm] Click success. Waiting for cooldown...")
-            -- Wait logic for cooldown
             local cooldowns = getCooldownsFolder()
             local skillCooldown = nil
             local t = 0
-            
-            -- Wait for cooldown to appear (Validation that skill was used)
             while t < 5 do
                 if cooldowns then
                     for _, cd in ipairs(cooldowns:GetChildren()) do
                         if string.find(string.lower(cd.Name), "fruit summoning") then
-                            skillCooldown = cd
-                            break
+                            skillCooldown = cd break
                         end
                     end
                 end
-                if skillCooldown then 
-                    print("[AutoFarm] Cooldown detected!")
-                    break 
-                end
+                if skillCooldown then break end
                 t = t + 0.5
                 task.wait(0.5)
             end
             
-            -- Wait for cooldown to finish
             if skillCooldown then
                 while skillCooldown.Parent do
                     task.wait(0.5)
                     if not AutoFarmHandler.Settings.AutoSummon then return end
                 end
-                print("[AutoFarm] Cooldown finished. Ready to summon again.")
                 task.wait(0.5) 
-            else 
-                print("[AutoFarm] No cooldown found (Did the skill fail to activate?). Waiting 2s.")
+            else
                 task.wait(2)
             end
         else
-            -- Slot not found or UI not ready
-            print("[AutoFarm] Click failed or skill not found. Retrying in 2s.")
             task.wait(2)
         end
     end
-    print("[AutoFarm] Summon Loop Stopped")
 end
 
 function AutoFarmHandler.toggleSummon(val)
     AutoFarmHandler.Settings.AutoSummon = val
-    
-    if State.SummonThread then
-        task.cancel(State.SummonThread)
-        State.SummonThread = nil
-    end
+    if State.SummonThread then task.cancel(State.SummonThread) State.SummonThread = nil end
     
     if val then
-        if not AutoFarmHandler.Settings.AutoPickup then
-            AutoFarmHandler.togglePickup(true)
-        end
+        if not AutoFarmHandler.Settings.AutoPickup then AutoFarmHandler.togglePickup(true) end
+        startClayDollWatcher()
+        startSafetyWatcher()
         State.SummonThread = task.spawn(summonLoop)
+    else
+        stopClayDollWatcher()
+        stopSafetyWatcher()
     end
 end
 
