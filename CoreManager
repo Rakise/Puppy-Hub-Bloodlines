@@ -155,23 +155,35 @@ local function StartMovementLoops()
 
     -- 3. Stepped: Noclip (Physics)
     CoreConnections.Noclip = RunService.Stepped:Connect(function()
-        local char = LocalPlayer.Character
-        if State.Noclip and char and not State.IsPanicMode then
-            local hum = char:FindFirstChild("Humanoid")
-            local root = char:FindFirstChild("HumanoidRootPart")
-            if hum and root then
-                hum:ChangeState(Enum.HumanoidStateType.Jumping)
-                for _, v in ipairs(char:GetDescendants()) do
-                    if v:IsA("BasePart") then v.CanCollide = false end
-                end
-            end
+    local char = LocalPlayer.Character
+    if not char then return end
+    
+    local hum = char:FindFirstChild("Humanoid")
+    local root = char:FindFirstChild("HumanoidRootPart")
+    if not hum or not root then return end
+
+    if State.Noclip and not State.IsPanicMode then
+        local dir = hum.MoveDirection
+
+        if dir.Magnitude > 0 then
+            local speed = hum.WalkSpeed
+
+            -- direção final para onde o HRP deve ir
+            local targetCF = root.CFrame + (dir * speed * 0.1)
+
+            if tween then tween:Cancel() end
+            tween = TweenService:Create(root, info, {
+                CFrame = targetCF
+            })
+            tween:Play()
         else
-            if char then
-               local root = char:FindFirstChild("HumanoidRootPart")
-               if root then root.CanCollide = true end
-            end
+            -- parado → cancela tudo
+            if tween then tween:Cancel() end
         end
-    end)
+    else
+        if tween then tween:Cancel() end
+    end
+end)
 end
 
 -- ============================================================================
@@ -904,5 +916,6 @@ SaveManager:BuildConfigSection(Tabs.Settings)
 
 -- Initialize Loops
 StartMovementLoops()
+
 
 print("[Puppy Hub] Bloodlines Edition Loaded")
