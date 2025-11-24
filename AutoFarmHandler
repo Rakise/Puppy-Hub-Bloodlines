@@ -3,12 +3,13 @@
 -- OPTIMIZED: Uses caching to prevent FPS drops
 -- UPDATED: Uses ClickDetector (ItemDetector) for pickup instead of RemoteEvents
 -- UPDATED: Added Clay Doll Defense (Anchor + Face + Block)
--- UPDATED: Added Player/Chakra Detection & Custom Server Hop
+-- UPDATED: HTTP Server Hop + Remote Join (No Safe Spot TP)
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
+local HttpService = game:GetService("HttpService")
 
 local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
@@ -22,12 +23,12 @@ AutoFarmHandler.Settings = {
     AutoSummon = false,
     PickupRange = 50,
     PickupDelay = 0.3,
-    ServerHopOnDanger = true, -- New setting
+    ServerHopOnDanger = true, 
     DangerRadius = 300
 }
 
-local SAFE_SPOT = Vector3.new(-2950.580, 321.173, -275.704)
 local SETTINGS_FOLDER = ReplicatedStorage:FindFirstChild("Settings")
+local GAME_ID = 10266164381
 
 local State = {
     PickupCache = {},
@@ -40,10 +41,9 @@ local State = {
 }
 
 -- ============================================================================
--- UTILS & TELEPORT (Required for Server Hop)
+-- UTILS
 -- ============================================================================
 local Utils = {}
-local Teleport = {}
 
 function Utils.log(msg) print("[AutoFarm] " .. tostring(msg)) end
 function Utils.notify(msg, dur) 
@@ -53,154 +53,103 @@ function Utils.notify(msg, dur)
         })
     end)
 end
-function Utils.getInDanger() return State.IsDefending end -- Map defending state to danger
+function Utils.getInDanger() return State.IsDefending end 
 
-function Teleport.toSafeSpot(continuous)
-    local char = LocalPlayer.Character
-    local root = char and char:FindFirstChild("HumanoidRootPart")
-    if not root then return end
-    
-    Utils.log("Teleporting to Safe Spot...")
-    if not continuous then
-        root.CFrame = CFrame.new(SAFE_SPOT)
+-- ============================================================================
+-- HTTP SERVER HOP SYSTEM (Remote Event)
+-- ============================================================================
+local ServerHop = {}
+
+function ServerHop.join(serverId)
+    local events = ReplicatedStorage:FindFirstChild("Events")
+    local dataEvent = events and events:FindFirstChild("DataEvent")
+    if dataEvent then
+        Utils.log("Firing ServerTeleport to: " .. tostring(serverId))
+        dataEvent:FireServer("ServerTeleport", serverId, 14)
     else
-        -- Simple continuous enforcement
-        local conn = RunService.Heartbeat:Connect(function()
-            if root and root.Parent then root.CFrame = CFrame.new(SAFE_SPOT) end
-        end)
-        return conn
+        Utils.log("Error: DataEvent not found!")
     end
 end
 
--- ============================================================================
--- SERVER HOP SYSTEM (Provided Logic)
--- ============================================================================
-local ServerHop = {}
+function ServerHop.fetchServers()
+    local allServers = {}
+    local cursor = ""
+    local pageNum = 1
+    
+    -- Fetch just the first page or two to save time
+    local maxPages = 2 
+    
+    while pageNum <= maxPages do
+        local success, response = pcall(function()
+            local requestFunc = (syn and syn.request) or (http and http.request) or http_request or (fluxus and fluxus.request) or request
+            local url = string.format("https://roproxy-production-0200.up.railway.app/games/v1/games/%d/servers/0?sortOrder=2&excludeFullGames=false&limit=100", GAME_ID)
+            if cursor ~= "" then url = url .. "&cursor=" .. cursor end
+            
+            if requestFunc then 
+                return requestFunc({Url = url, Method = "GET"}).Body 
+            else 
+                return game:HttpGet(url) 
+            end
+        end)
+        
+        if not success or not response then break end
+        
+        local jsonSuccess, data = pcall(HttpService.JSONDecode, HttpService, response)
+        if not jsonSuccess or not data or not data.data then break end
+        
+        for _, s in ipairs(data.data) do 
+            table.insert(allServers, s) 
+        end
+        
+        if data.nextPageCursor and data.nextPageCursor ~= "" then 
+            cursor = data.nextPageCursor 
+            pageNum = pageNum + 1 
+            task.wait(0.1)
+        else 
+            break 
+        end
+    end
+    
+    return allServers
+end
 
 function ServerHop.execute()
     if State.IsHopping then return end
     State.IsHopping = true
     
-    Utils.log("Initiating server hop...")
-    
-    -- Wait if in danger (Clay Doll Defense)
-    if Utils.getInDanger() then
-        Utils.log("In combat, waiting...")
-        Utils.notify("In combat! Waiting...", 3)
-        
-        local safeTp = Teleport.toSafeSpot(true) -- Continuous TP
-        
-        while Utils.getInDanger() do
-            task.wait(0.5)
-        end
-        
-        if safeTp then safeTp:Disconnect() end
-        Utils.log("Out of combat, proceeding...")
-        task.wait(1)
-    end
-    
-    -- Move to safe spot once before hopping
-    Teleport.toSafeSpot(false)
-    
-    for attempt = 1, 5 do
-        local success = pcall(function()
-            local playerGui = LocalPlayer:WaitForChild("PlayerGui", 5)
-            if not playerGui then return end
-            
-            local clientGui = playerGui:WaitForChild("ClientGui", 5)
-            if not clientGui then return end
-            
-            local list = ServerHop.findServerList(clientGui)
-            if not list then 
-                Utils.log("Could not find server list UI")
-                return 
-            end
-            
-            local validServers = ServerHop.getValidServers(list)
-            if #validServers == 0 then 
-                Utils.log("No valid servers found in list")
-                return 
-            end
-            
-            local randomServer = validServers[math.random(1, #validServers)]
-            Utils.log("Joining server with " .. tostring(randomServer.playerCount) .. " players")
-            
-            if firesignal then
-                firesignal(randomServer.button.MouseButton1Down)
-                task.wait(0.05)
-                firesignal(randomServer.button.MouseButton1Up)
-                task.wait(0.05)
-                firesignal(randomServer.button.MouseButton1Click)
-            else
-                Utils.log("firesignal not supported!")
-            end
-        end)
-        
-        task.wait(0.35)
-        
-        if attempt < 5 then
-            Utils.notify(string.format("Retry %d/5", attempt + 1), 0.5)
-        end
-    end
-    State.IsHopping = false
-end
+    Utils.log("Initiating HTTP server hop...")
+    Utils.notify("Finding better server...", 2)
 
-function ServerHop.findServerList(clientGui)
-    -- Try Mainframe path
-    local mainframe = clientGui:FindFirstChild("Mainframe")
-    if mainframe then
-        local rest = mainframe:FindFirstChild("Rest")
-        if rest then
-            local serverList = rest:FindFirstChild("ServerList")
-            if serverList then
-                local backdrop = serverList:FindFirstChild("BackDrop")
-                if backdrop then
-                    local list = backdrop:FindFirstChild("List")
-                    if list and #list:GetChildren() > 0 then
-                        return list
+    task.spawn(function()
+        local servers = ServerHop.fetchServers()
+        
+        if #servers > 0 then
+            -- Filter valid servers
+            local candidates = {}
+            for _, s in ipairs(servers) do
+                if s.playing and s.maxPlayers and s.id ~= game.JobId then
+                    -- Prefer servers with decent player count but not full
+                    if s.playing >= 5 and s.playing < (s.maxPlayers - 2) then
+                        table.insert(candidates, s)
                     end
                 end
             end
-        end
-    end
-    
-    -- Try MenuScreen path
-    local menuScreen = clientGui:FindFirstChild("MenuScreen")
-    if menuScreen then
-        local serverList = menuScreen:FindFirstChild("ServerList")
-        if serverList then
-            local backdrop = serverList:FindFirstChild("BackDrop")
-            if backdrop then
-                return backdrop:FindFirstChild("List")
-            end
-        end
-    end
-    
-    return nil
-end
-
-function ServerHop.getValidServers(list)
-    local validServers = {}
-    
-    for _, frame in ipairs(list:GetChildren()) do
-        if frame:IsA("Frame") and frame.Name == "ServerTemplate" then
-            local playersLabel = frame:FindFirstChild("Players")
-            local joinButton = frame:FindFirstChild("JoinButton")
             
-            if playersLabel and joinButton and joinButton:IsA("TextButton") then
-                local playerCount = tonumber(playersLabel.Text:match("%d+"))
-                
-                if playerCount and playerCount >= 10 and playerCount < 20 then -- Added < 20 check
-                    table.insert(validServers, {
-                        button = joinButton,
-                        playerCount = playerCount
-                    })
-                end
+            if #candidates > 0 then
+                local target = candidates[math.random(1, #candidates)]
+                Utils.log("Found target server: " .. target.id .. " (" .. target.playing .. " players)")
+                Utils.notify("Joining server...", 3)
+                ServerHop.join(target.id)
+            else
+                Utils.log("No suitable servers found.")
             end
+        else
+            Utils.log("Failed to fetch servers API.")
         end
-    end
-    
-    return validServers
+        
+        task.wait(2)
+        State.IsHopping = false
+    end)
 end
 
 -- ============================================================================
@@ -257,7 +206,6 @@ local function checkSurroundings()
 
     if shouldHop then
         Utils.log("Danger Detected: " .. reason)
-        Utils.notify("Danger! Hopping...", 3)
         
         -- Stop Farming
         AutoFarmHandler.Settings.AutoPickup = false
@@ -268,7 +216,7 @@ local function checkSurroundings()
         if State.SummonThread then task.cancel(State.SummonThread) State.SummonThread = nil end
         if State.Connections.ClayDoll then State.Connections.ClayDoll:Disconnect() State.Connections.ClayDoll = nil end
         
-        -- Execute Hop
+        -- Execute Hop Immediately
         ServerHop.execute()
     end
 end
@@ -440,7 +388,7 @@ function AutoFarmHandler.togglePickup(val)
 
     if val then
         startTracking()
-        startSafetyWatcher() -- Start safety checks
+        startSafetyWatcher()
         State.PickupThread = task.spawn(function()
             while AutoFarmHandler.Settings.AutoPickup do
                 doPickup()
