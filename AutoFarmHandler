@@ -167,7 +167,7 @@ local function clickSkillSlot()
     
     print("[AutoFarm] Debug: Scanning slots...")
     for _, slot in ipairs(loadout:GetChildren()) do
-        if string.find(slot.Name, "Slot") then
+        if slot:IsA("ImageButton") and (string.find(slot.Name, "Slot") or string.find(slot.Name, "Key")) then
             local slotText = slot:FindFirstChild("SlotText")
             
             -- Debug print for every slot
@@ -180,15 +180,19 @@ local function clickSkillSlot()
             if slotText and string.find(string.lower(slotText.Text), "fruit summoning") then
                 print("[AutoFarm] MATCH FOUND in " .. slot.Name .. "! Attempting to equip...")
                 
-                -- 1. Equip Slot
+                -- 1. Equip Slot (Simulate full click: Down -> Up)
                 if firesignal then
+                    print("[AutoFarm] Firing signal (MouseButton1Down)...")
+                    firesignal(slot.MouseButton1Down)
+                    task.wait(0.05) -- Small realistic delay between press and release
                     print("[AutoFarm] Firing signal (MouseButton1Up)...")
                     firesignal(slot.MouseButton1Up)
                 else
                     print("[AutoFarm] Warning: firesignal not supported!")
                 end
                 
-                task.wait(0.2)
+                print("[AutoFarm] Waiting 0.3s before activation...")
+                task.wait(0.3) -- Requested delay
                 
                 -- 2. Use Skill
                 if mouse1click then
