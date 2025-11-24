@@ -13,8 +13,8 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 
 -- Constants
-local BRAZIL_HUB_BASE_URL = "https://ghproxy.net/https://raw.githubusercontent.com/Rakise/Puppy-Hub-Bloodlines/refs/heads/main/"
-local REPO_BASE_URL = 'https://ghproxy.net/https://raw.githubusercontent.com/violin-suzutsuki/LinoriaLib/refs/heads/main/'
+local BRAZIL_HUB_BASE_URL = "https://raw.githubusercontent.com/Rakise/Puppy-Hub-Bloodlines/refs/heads/main/"
+local REPO_BASE_URL = 'https://raw.githubusercontent.com/violin-suzutsuki/LinoriaLib/refs/heads/main/'
 local CONFIG_FILE = "PuppyHub_Bloodlines_Config.json"
 
 -- Load Library
