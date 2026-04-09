@@ -1,5 +1,6 @@
--- Boss Farm Module for Bloodlines (Optimized & Integrated)
--- Updated: HTTP Server Hop + Remote Join (No UI Clicking, No Safe Spot TP)
+-- Boss Farm Module for Bloodlines V2
+-- Ported features from JitlerHub: Charging, Dash+Attack, Weapon Detection,
+-- Knocked/Grip, Per-Boss Animation Monitors, Auto-Loot, Advanced Boss Loop
 
 local BossFarm = {}
 BossFarm.__index = BossFarm
@@ -12,9 +13,20 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local HttpService = game:GetService("HttpService")
 local LocalPlayer = Players.LocalPlayer
-local dataEvent = ReplicatedStorage:WaitForChild("Events"):WaitForChild("DataEvent")
+local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 
 local GAME_ID = 10266164381
+
+-- Cached remote references
+local function GetDataEvent()
+    local events = ReplicatedStorage:FindFirstChild("Events")
+    return events and events:FindFirstChild("DataEvent")
+end
+
+local function GetDataFunction()
+    local events = ReplicatedStorage:FindFirstChild("Events")
+    return events and events:FindFirstChild("DataFunction")
+end
 
 -- ============================================
 -- SETTINGS
@@ -24,81 +36,183 @@ BossFarm.Settings = {
     SelectedBosses = {},
     ServerHopIfChakraSense = false,
     ServerHopIfNoBoss = false,
-    AttackInterval = 0.5,
+    AttackInterval = 0.12,
     HealthCheckInterval = 0.3,
-    PlayerDetectionRadius = 100,
-    FarmHeightOffset = 15,
-    SafeHeightOffset = 30
+    PlayerDetectionRadius = 300,
+    PlayerVerticalTolerance = 120,
+    AutoLootOnKill = false,
+    -- Advanced Boss Loop
+    BossLoopEnabled = false,
+    HopAfterLoop = false,
 }
 
 -- ============================================
--- BOSS CONFIGS
+-- WEAPON CONFIGS
+-- ============================================
+local KNOWN_WEAPONS = {
+    "Onyx Resanagi", "Golden Resanagi", "Silver Resanagi",
+    "Onyx Zabunagi", "Golden Zabunagi", "Silver Zabunagi",
+    "Onyx Asumai",
+}
+local KNOWN_WEAPON_SET = {}
+for _, w in ipairs(KNOWN_WEAPONS) do KNOWN_WEAPON_SET[w] = true end
+
+local WEAPON_HEIGHT_BOOSTS = {
+    ["Onyx Asumai"] = -3,
+    ["Fist"] = -2,
+}
+
+-- ============================================
+-- BOSS CONFIGS (Expanded)
 -- ============================================
 local BOSS_CONFIGS = {
-    ["Barbarit The Hallowed"] = {
-        farmHeight = 16, safeHeight = 55, positionAbove = true,
-        dangerousAnimations = { ["rbxassetid://9954909571"] = true },
-        animationResponse = "height", requiresSpawn = false
-    },
     ["Wooden Golem"] = {
-        farmHeight = 15, positionAbove = true,
-        dangerousAnimations = { ["rbxassetid://120758909308511"] = true, ["rbxassetid://116907126244057"] = true },
-        animationResponse = "teleport", safePosition = Vector3.new(-2950.580, 321.173, -275.704),
-        requiresSpawn = false
+        height = 16, positionAbove = true,
+        dangerousAnimations = {
+            ["120758909308511"] = true,
+            ["116907126244057"] = true,
+        },
+        animationResponse = "teleport",
+        safePosition = Vector3.new(-2950.580, 321.173, -275.704),
     },
-    ["Chakra Knight"] = {
-        farmHeight = 15, safeHeight = 25, positionAbove = false,
-        dangerousAnimations = { ["rbxassetid://10141233349"] = true },
-        animationResponse = "height", requiresSpawn = false
+    ["Hyuga Boss"] = {
+        height = 10.75, positionAbove = true,
+        hasVoidZone = true,
+        lootSpot = Vector3.new(-663.8, -359.9, -728.9),
     },
-    ["Hallowed Chakra Knight"] = {
-        farmHeight = 15, safeHeight = 25, positionAbove = false,
-        dangerousAnimations = { ["rbxassetid://10141233349"] = true },
-        animationResponse = "height", requiresSpawn = false
+    ["Lava Snake"] = {
+        height = 38, positionAbove = true,
+        triggerSpawn = true,
+        triggerPos = Vector3.new(-547.6, -541.7, -1281.8),
+        lootSpot = Vector3.new(-546.7, -546.9, -1461.6),
     },
-    ["Tairock"] = {
-        farmHeight = 11, safeHeight = 30, positionAbove = false,
-        dangerousAnimations = {}, animationResponse = "height", requiresSpawn = false
+    ["Haku Boss"] = {
+        height = 10.75, positionAbove = true,
+        hasIceDragon = true,
+        lootSpot = Vector3.new(-3788.1, -238.5, -9723.9),
     },
-    ["Hallowed Tairock"] = {
-        farmHeight = 11, safeHeight = 30, positionAbove = false,
-        dangerousAnimations = {}, animationResponse = "height", requiresSpawn = false
+    ["Barbarit The Rose"] = {
+        height = 14, positionAbove = true,
+        dangerousAnimations = { ["9954909571"] = true },
+        animationResponse = "height", safeHeightBoost = 10,
+    },
+    ["Barbarit The Hallowed"] = {
+        height = 16, positionAbove = true,
+        dangerousAnimations = { ["9954909571"] = true },
+        animationResponse = "height", safeHeightBoost = 10,
     },
     ["Manda"] = {
-        farmHeight = 20, safeHeight = 40, positionAbove = true,
-        dangerousAnimations = {}, animationResponse = "height", requiresSpawn = true
-    }
+        height = 38, positionAbove = true,
+        triggerSpawn = true,
+        dangerousAnimations = { ["9954909571"] = true },
+        animationResponse = "height", safeHeightBoost = 15,
+    },
+    ["Tairock"] = {
+        height = 10.75, positionAbove = false,
+        triggerSpawn = true,
+    },
+    ["Hallowed Tairock"] = {
+        height = 10.75, positionAbove = false,
+    },
+    ["Chakra Knight"] = {
+        height = 15, positionAbove = false,
+        dangerousAnimations = { ["10141233349"] = true },
+        animationResponse = "height", safeHeightBoost = 10,
+    },
+    ["Hallowed Chakra Knight"] = {
+        height = 15, positionAbove = false,
+        dangerousAnimations = { ["10141233349"] = true },
+        animationResponse = "height", safeHeightBoost = 10,
+    },
+    ["The Barbarian"] = {
+        height = 14, positionAbove = true,
+    },
+    ["The Ringed Samurai"] = {
+        height = 14, positionAbove = true,
+        triggerSpawn = true,
+        triggerPos = Vector3.new(1418.9, -474.4, -595.8),
+    },
 }
 
 local bossDatabase = {}
 for bossName, _ in pairs(BOSS_CONFIGS) do table.insert(bossDatabase, bossName) end
 table.sort(bossDatabase)
 
-local SAFE_SPOT = Vector3.new(-2950.580, 321.173, -275.704)
+-- ============================================
+-- TRINKET SET (For Auto-Loot)
+-- ============================================
+local TRINKET_NAMES = {
+    "Gold Bracelet", "Gold Ring", "Silver Ring", "Silver Bracelet", "Silver Necklace", "Gold Necklace",
+    "Gold Enclosed Ring", "Silver Enclosed Ring", "Ring Schematics", "Ring Of The Neoncat",
+    "Ring Of Resistance", "Ring Of Nourishment", "Ring Of Favor", "Ring Of Remedy", "Ring Of Vitality",
+    "Ring Of Infusion", "Bloodbite Ring", "Ring Of Beauty", "Ring Of Dexterity", "Ring Of A Helping Hand",
+    "Aqua Gem", "Flame Gem", "Spark Gem", "Black Flame Gem", "Ground Gem", "Ice Gem", "Wind Gem",
+    "Poison Gem", "Extraction Spoon", "Scalpel", "Chakra Heart", "Fruit Of Forgetfulness",
+    "Progression Soul", "Memory Soul", "Summoning Scroll", "Life Up Fruit", "Mastery Scroll",
+    "Trait Scroll", "Kusanagi Schematics", "Raijin Schematics", "Staff Schematics",
+    "Samehada Schematics", "Gunbai Schematics",
+}
+local TrinketSet = {}
+for _, n in ipairs(TRINKET_NAMES) do TrinketSet[n] = true end
+
+-- ============================================
+-- SAFE SPOTS
+-- ============================================
+local SECRET_SPOT = Vector3.new(-4458.5, 660.7, -4895.2)
+local HYUGA_VOID_SAFE_SPOT = Vector3.new(-700.8, -334.3, -780.8)
+local HAKU_SAFE_SPOT = Vector3.new(-2969.2, 1832.9, -9610.4)
+
+-- ============================================
+-- CHARGE ANIMATION
+-- ============================================
+local CHARGE_ANIM_ID = "rbxassetid://9864206537"
 
 -- ============================================
 -- STATE
 -- ============================================
 local State = {
     running = false,
-    currentBoss = nil,
+    currentBoss = nil,       -- boss name string
+    currentModel = nil,      -- boss Model reference
+    currentHumanoid = nil,   -- boss Humanoid reference
     connections = {},
-    animationStates = {},
+    threads = {},
     lastBossPosition = nil,
     healthThreshold = 0,
     farmThread = nil,
-    teleportMode = false,
-    inDanger = false
+    inDanger = false,
+    -- Charging
+    chargingActive = false,
+    chargeAnimTrack = nil,
+    -- Weapon
+    detectedWeapon = "Fist",
+    weaponHeightBoost = 0,
+    -- Per-boss height boosts (dynamic, change during animations)
+    bossHeightBoost = 0,
+    -- Hyuga void
+    hyugaInVoid = false,
+    -- Haku safe spot
+    hakuSafeSpot = false,
+    hakuSafeSpotEndTime = 0,
+    -- Knocked
+    knockedThread = nil,
+    -- Anchor + Attack
+    anchorConn = nil,
+    attackThread = nil,
+    -- Boss Loop
+    bossLoopThread = nil,
 }
 
 -- ============================================
 -- UTILS
 -- ============================================
 local Utils = {}
+
 function Utils.log(message, level)
     local prefix = "[Boss Farm]"
     if level == "warn" then warn(prefix, message) else print(prefix, message) end
 end
+
 function Utils.notify(text, duration)
     pcall(function()
         game:GetService("StarterGui"):SetCore("SendNotification", {
@@ -106,6 +220,7 @@ function Utils.notify(text, duration)
         })
     end)
 end
+
 function Utils.getPlayerData()
     local character = LocalPlayer.Character
     if not character then return nil end
@@ -114,197 +229,768 @@ function Utils.getPlayerData()
     if not rootPart or not humanoid then return nil end
     return { character = character, rootPart = rootPart, humanoid = humanoid }
 end
+
 function Utils.isValidBoss(boss)
     if not boss or not boss.Parent or not boss:IsA("Model") then return false end
     local humanoid = boss:FindFirstChildOfClass("Humanoid")
     local rootPart = boss:FindFirstChild("HumanoidRootPart")
     return humanoid and rootPart and humanoid.Health > 0
 end
-function Utils.disconnectAll(connections)
-    for i = #connections, 1, -1 do
-        local conn = connections[i]
-        if conn and typeof(conn) == "RBXScriptConnection" then pcall(function() conn:Disconnect() end) end
-        connections[i] = nil
+
+function Utils.getBossRoot(model)
+    if not model or not model.Parent then return nil end
+    return model:FindFirstChild("HumanoidRootPart")
+        or model:FindFirstChild("Head")
+        or model:FindFirstChild("Torso")
+        or model:FindFirstChildWhichIsA("BasePart")
+end
+
+function Utils.disconnectAll()
+    for i = #State.connections, 1, -1 do
+        local conn = State.connections[i]
+        if conn and typeof(conn) == "RBXScriptConnection" then
+            pcall(function() conn:Disconnect() end)
+        end
+        State.connections[i] = nil
     end
 end
-function Utils.getInDanger()
-    return State.inDanger
+
+function Utils.cancelAllThreads()
+    for i = #State.threads, 1, -1 do
+        if State.threads[i] then
+            pcall(task.cancel, State.threads[i])
+        end
+        State.threads[i] = nil
+    end
+end
+
+function Utils.addConnection(conn)
+    table.insert(State.connections, conn)
+    return conn
+end
+
+function Utils.addThread(thread)
+    table.insert(State.threads, thread)
+    return thread
 end
 
 -- ============================================
--- BOSS DETECTION & ANIMATION
+-- CHARGING SYSTEM
 -- ============================================
-local Detection = {}
-function Detection.findBoss(bossName)
-    for _, child in pairs(workspace:GetChildren()) do
-        if child.Name == bossName and Utils.isValidBoss(child) then return child end
-    end
-    return nil
-end
-function Detection.findAnySelectedBoss()
-    for bossName, isSelected in pairs(BossFarm.Settings.SelectedBosses) do
-        if isSelected then
-            local boss = Detection.findBoss(bossName)
-            if boss then return boss end
+local Charging = {}
+
+function Charging.start()
+    if State.chargingActive then return end
+    State.chargingActive = true
+
+    -- Fire charging remote
+    pcall(function()
+        local dataEvent = GetDataEvent()
+        if dataEvent then dataEvent:FireServer("Charging") end
+    end)
+
+    -- Play charge animation locally
+    pcall(function()
+        local char = LocalPlayer.Character
+        if not char then return end
+        local hum = char:FindFirstChildOfClass("Humanoid")
+        if not hum then return end
+        local animator = hum:FindFirstChildOfClass("Animator")
+        if not animator then
+            animator = Instance.new("Animator")
+            animator.Parent = hum
         end
-    end
-    return nil
+        local anim = Instance.new("Animation")
+        anim.AnimationId = CHARGE_ANIM_ID
+        local track = animator:LoadAnimation(anim)
+        track.Looped = true
+        track:Play()
+        State.chargeAnimTrack = track
+    end)
+
+    Utils.log("Charging started")
 end
-function Detection.isPlayerNearby(boss, radius)
-    local rootPart = boss:FindFirstChild("HumanoidRootPart")
-    if not rootPart then return false end
-    for _, player in pairs(Players:GetPlayers()) do
+
+function Charging.stop()
+    if not State.chargingActive then return end
+    State.chargingActive = false
+
+    pcall(function()
+        if State.chargeAnimTrack then
+            State.chargeAnimTrack:Stop()
+            State.chargeAnimTrack = nil
+        end
+    end)
+
+    pcall(function()
+        local dataEvent = GetDataEvent()
+        if dataEvent then dataEvent:FireServer("StopCharging") end
+    end)
+
+    Utils.log("Charging stopped")
+end
+
+-- ============================================
+-- WEAPON DETECTION
+-- ============================================
+local Weapons = {}
+
+function Weapons.scanHotbar()
+    local found = nil
+    pcall(function()
+        local gui = PlayerGui
+        local clientGui = gui and gui:FindFirstChild("ClientGui")
+        local mainframe = clientGui and clientGui:FindFirstChild("Mainframe")
+        local loadout = mainframe and mainframe:FindFirstChild("Loadout")
+        if not loadout then return end
+        for j = 1, 11 do
+            local slot = loadout:FindFirstChild("Slot" .. j)
+            if not slot then continue end
+            local slotText = slot:FindFirstChild("SlotText")
+            local itemName = slotText and slotText:IsA("TextLabel") and slotText.Text or ""
+            if itemName ~= "" and KNOWN_WEAPON_SET[itemName] then
+                found = itemName
+                return
+            end
+        end
+    end)
+    return found or "Fist"
+end
+
+function Weapons.equip(weaponName)
+    if weaponName == "Fist" or weaponName == "" then return end
+    pcall(function()
+        local dataEvent = GetDataEvent()
+        if dataEvent then
+            dataEvent:FireServer("Item", "Selected", weaponName)
+        end
+    end)
+end
+
+-- ============================================
+-- PLAYER SAFETY (Horizontal + Vertical Tolerance)
+-- ============================================
+local Safety = {}
+
+function Safety.getCharacterRoot(character)
+    if not character then return nil end
+    return character:FindFirstChild("HumanoidRootPart")
+        or character:FindFirstChild("UpperTorso")
+        or character:FindFirstChild("Torso")
+        or character:FindFirstChild("Head")
+end
+
+function Safety.isPlayerNearPosition(position, radius, verticalTolerance)
+    radius = radius or BossFarm.Settings.PlayerDetectionRadius
+    verticalTolerance = verticalTolerance or BossFarm.Settings.PlayerVerticalTolerance
+    
+    for _, player in ipairs(Players:GetPlayers()) do
         if player ~= LocalPlayer and player.Character then
-            local pRoot = player.Character:FindFirstChild("HumanoidRootPart")
-            if pRoot and (pRoot.Position - rootPart.Position).Magnitude <= radius then
-                return true, player.Name
+            local root = Safety.getCharacterRoot(player.Character)
+            if root then
+                -- Check for absurd positions (players at spawn/loading)
+                if math.abs(root.Position.X) > 1e6 or math.abs(root.Position.Y) > 1e6 then
+                    continue
+                end
+                
+                local horizontal = Vector3.new(root.Position.X, 0, root.Position.Z)
+                local center = Vector3.new(position.X, 0, position.Z)
+                local horizontalDist = (horizontal - center).Magnitude
+                local verticalDist = math.abs(root.Position.Y - position.Y)
+                
+                if horizontalDist <= radius and verticalDist <= verticalTolerance then
+                    return true, player.Name
+                end
             end
         end
     end
     return false
 end
 
-local Animation = {}
-function Animation.setup(boss, config)
-    if not config.dangerousAnimations then return end
-    local humanoid = boss:FindFirstChildOfClass("Humanoid")
-    if not humanoid then return end
-    local animator = humanoid:FindFirstChildOfClass("Animator")
-    if not animator then return end
+function Safety.isBossContested(model, radius)
+    local bossRoot = Utils.getBossRoot(model)
+    if not bossRoot then return false end
+    return Safety.isPlayerNearPosition(bossRoot.Position, radius)
+end
+
+function Safety.isChakraSenseActive()
+    local SETTINGS_FOLDER = ReplicatedStorage:FindFirstChild("Settings")
     
-    State.animationStates[boss] = { 
-        dangerous = false, responseType = config.animationResponse or "height", safePosition = config.safePosition
-    }
-    
-    local conn = animator.AnimationPlayed:Connect(function(track)
-        if config.dangerousAnimations[track.Animation.AnimationId] then
-            State.animationStates[boss].dangerous = true
-            State.inDanger = true
-            track.Stopped:Connect(function()
-                if State.animationStates[boss] then
-                    State.animationStates[boss].dangerous = false
-                    State.inDanger = false
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer then
+            -- Check ReplicatedStorage Settings for "sense" skill
+            if SETTINGS_FOLDER then
+                local pSettings = SETTINGS_FOLDER:FindFirstChild(player.Name)
+                if pSettings then
+                    local sVal = pSettings:FindFirstChild("CurrentSkill")
+                    if sVal and type(sVal.Value) == "string" and string.find(string.lower(sVal.Value), "sense") then
+                        return true, player.Name
+                    end
                 end
-            end)
+            end
+            
+            -- Check equipped tools for Chakra Sense
+            if player.Character then
+                for _, tool in ipairs(player.Character:GetChildren()) do
+                    if tool:IsA("Tool") and string.find(string.lower(tool.Name), "sense") then
+                        return true, player.Name
+                    end
+                end
+            end
         end
-    end)
-    table.insert(State.connections, conn)
+    end
+    return false
 end
-function Animation.isDangerous(boss) return State.animationStates[boss] and State.animationStates[boss].dangerous end
-function Animation.getResponseType(boss)
-    local s = State.animationStates[boss]
-    if s then return s.responseType, s.safePosition end
-    return "height", nil
-end
-function Animation.cleanup(boss) State.animationStates[boss] = nil end
 
 -- ============================================
--- TELEPORT
+-- BOSS DETECTION
 -- ============================================
-local Teleport = {}
-function Teleport.toSafeSpot(continuous)
-    local playerData = Utils.getPlayerData()
-    if not playerData then return nil end
-    Utils.log("Moving to safe spot" .. (continuous and " (continuous)" or ""))
-    if not continuous then playerData.rootPart.CFrame = CFrame.new(SAFE_SPOT) return nil end
-    local conn = RunService.Heartbeat:Connect(function()
+local Detection = {}
+
+function Detection.findBoss(bossName)
+    -- Search workspace root, NPCs, Mobs, Enemies folders
+    for _, folderName in ipairs({"NPCs", "Mobs", "Enemies"}) do
+        local folder = workspace:FindFirstChild(folderName)
+        if folder then
+            for _, model in ipairs(folder:GetChildren()) do
+                if model:IsA("Model") and model.Name == bossName then
+                    local hum = model:FindFirstChildOfClass("Humanoid")
+                    if hum and hum.Health > 0 then return hum, model end
+                end
+            end
+        end
+    end
+    -- Search workspace root
+    for _, child in ipairs(workspace:GetChildren()) do
+        if child.Name == bossName and child:IsA("Model") then
+            local hum = child:FindFirstChildOfClass("Humanoid")
+            if hum and hum.Health > 0 then return hum, child end
+        end
+    end
+    return nil, nil
+end
+
+function Detection.findAnySelectedBoss()
+    for bossName, isSelected in pairs(BossFarm.Settings.SelectedBosses) do
+        if isSelected then
+            local hum, model = Detection.findBoss(bossName)
+            if hum and model then return hum, model, bossName end
+        end
+    end
+    return nil, nil, nil
+end
+
+function Detection.triggerSpawnIfNeeded(bossName, config)
+    if not config.triggerSpawn then return end
+    if config.triggerPos then
         local pData = Utils.getPlayerData()
-        if pData and pData.rootPart and pData.rootPart.Parent then
-            pData.rootPart.CFrame = CFrame.new(SAFE_SPOT)
+        if pData then
+            pData.rootPart.CFrame = CFrame.new(config.triggerPos)
+        end
+        task.wait(2)
+    elseif bossName == "Lava Snake" then
+        local pData = Utils.getPlayerData()
+        if pData then
+            pData.rootPart.CFrame = CFrame.new(-547.6, -541.7, -1281.8)
+        end
+        task.wait(2)
+    end
+end
+
+function Detection.waitForBossSpawn(bossName, config, timeout)
+    timeout = timeout or 16
+    Detection.triggerSpawnIfNeeded(bossName, config)
+    
+    local start = tick()
+    repeat
+        local hum, model = Detection.findBoss(bossName)
+        if hum and model then return hum, model end
+        task.wait(1)
+    until tick() - start >= timeout
+    
+    return nil, nil
+end
+
+-- ============================================
+-- PER-BOSS ANIMATION MONITORS
+-- ============================================
+local AnimMonitors = {}
+
+-- Generic animation monitor (for bosses with simple danger anims)
+function AnimMonitors.setupGeneric(model, config)
+    if not config.dangerousAnimations then return end
+    local hum = model:FindFirstChildOfClass("Humanoid")
+    if not hum then return end
+    local animator = hum:FindFirstChildOfClass("Animator")
+    if not animator then return end
+    
+    Utils.addConnection(animator.AnimationPlayed:Connect(function(track)
+        if not State.running then return end
+        local assetId = track.Animation.AnimationId:match("rbxassetid://(%d+)") or track.Animation.AnimationId
+        if config.dangerousAnimations[assetId] then
+            local boost = config.safeHeightBoost or 15
+            State.bossHeightBoost = boost
+            State.inDanger = true
+            
+            Utils.addThread(task.spawn(function()
+                while track and track.IsPlaying and State.running do task.wait(0.1) end
+                task.wait(0.5)
+                State.bossHeightBoost = 0
+                State.inDanger = false
+            end))
+        end
+    end))
+end
+
+-- Hyuga Boss: void zone detection + dangerous animation dodge
+function AnimMonitors.setupHyuga(model)
+    local bossRoot = model:FindFirstChild("HumanoidRootPart")
+    if not bossRoot then return end
+    
+    -- Void zone monitor
+    local function isInHyugaVoidZone(pos)
+        return pos.X >= -826.4 and pos.X <= -524.0
+            and pos.Y >= -454.8 and pos.Y <= -450.8
+            and pos.Z >= -927.1 and pos.Z <= -621.1
+    end
+    
+    Utils.addThread(task.spawn(function()
+        -- Initial approach height reduction
+        State.bossHeightBoost = -2
+        task.wait(5)
+        if State.bossHeightBoost == -2 then State.bossHeightBoost = 0 end
+    end))
+    
+    Utils.addThread(task.spawn(function()
+        while State.running and model and model.Parent do
+            local inVoid = isInHyugaVoidZone(bossRoot.Position)
+            if inVoid and not State.hyugaInVoid then
+                State.hyugaInVoid = true
+            elseif not inVoid and State.hyugaInVoid then
+                State.hyugaInVoid = false
+            end
+            task.wait(0.5)
+        end
+        State.hyugaInVoid = false
+    end))
+    
+    -- Hyuga dangerous animations
+    local hum = model:FindFirstChildOfClass("Humanoid")
+    if not hum then return end
+    local animator = hum:FindFirstChildOfClass("Animator")
+    if not animator then return end
+    
+    local dangerAnims = { ["8699113073"] = true, ["8580099842"] = true }
+    Utils.addConnection(animator.AnimationPlayed:Connect(function(track)
+        if not State.running then return end
+        local assetId = track.Animation.AnimationId:match("rbxassetid://(%d+)") or track.Animation.AnimationId
+        if dangerAnims[assetId] then
+            State.bossHeightBoost = 20
+            Utils.addThread(task.spawn(function()
+                while track and track.IsPlaying and State.running do task.wait(0.1) end
+                task.wait(0.5)
+                State.bossHeightBoost = 0
+            end))
+        end
+    end))
+end
+
+-- Haku Boss: Ice Dragon dodge
+function AnimMonitors.setupHaku()
+    local debris = workspace:FindFirstChild("Debris")
+    
+    local function monitorDebris(debrisFolder)
+        Utils.addConnection(debrisFolder.ChildAdded:Connect(function(child)
+            if not State.running then return end
+            local dur = nil
+            if child.Name == "IceDragonHead" then dur = 4
+            elseif child:IsA("Beam") and child.Name == "Beam121" then dur = 1
+            end
+            
+            if dur then
+                local pData = Utils.getPlayerData()
+                if pData then
+                    pData.rootPart.CFrame = CFrame.new(HAKU_SAFE_SPOT)
+                    State.hakuSafeSpot = true
+                    State.hakuSafeSpotEndTime = tick() + dur
+                end
+            end
+        end))
+    end
+    
+    if debris then
+        monitorDebris(debris)
+    else
+        -- Wait for Debris folder to appear
+        local conn
+        conn = workspace.ChildAdded:Connect(function(c)
+            if c.Name == "Debris" then
+                conn:Disconnect()
+                monitorDebris(c)
+            end
+        end)
+        Utils.addConnection(conn)
+    end
+end
+
+-- Ringed Samurai: dodge slam
+function AnimMonitors.setupRingedSamurai(model)
+    local hum = model:FindFirstChildOfClass("Humanoid")
+    if not hum then return end
+    local animator = hum:FindFirstChildOfClass("Animator")
+    if not animator then return end
+    
+    Utils.addConnection(animator.AnimationPlayed:Connect(function(track)
+        if not State.running then return end
+        local assetId = track.Animation.AnimationId:match("rbxassetid://(%d+)") or track.Animation.AnimationId
+        if assetId == "137738911755203" then
+            State.bossHeightBoost = -100
+            Utils.addThread(task.spawn(function()
+                while track and track.IsPlaying and State.running do task.wait(0.1) end
+                task.wait(0.35)
+                State.bossHeightBoost = 0
+            end))
+        end
+    end))
+end
+
+-- Setup all animation monitors for a given boss
+function AnimMonitors.setup(model, bossName, config)
+    State.bossHeightBoost = 0
+    State.hyugaInVoid = false
+    State.hakuSafeSpot = false
+    
+    if bossName == "Hyuga Boss" then
+        AnimMonitors.setupHyuga(model)
+    elseif bossName == "Haku Boss" then
+        AnimMonitors.setupHaku()
+    elseif bossName == "The Ringed Samurai" then
+        AnimMonitors.setupRingedSamurai(model)
+    end
+    
+    -- Generic animation handler for all bosses that define dangerousAnimations
+    if config.dangerousAnimations and next(config.dangerousAnimations) then
+        -- Don't double-setup for bosses with dedicated handlers
+        if bossName ~= "Hyuga Boss" then
+            AnimMonitors.setupGeneric(model, config)
+        end
+    end
+end
+
+-- ============================================
+-- KNOCKED DETECTION + AUTO GRIP
+-- ============================================
+local Knocked = {}
+
+function Knocked.waitForBeingGripped(model, timeout)
+    timeout = timeout or 6
+    local start = tick()
+    
+    while tick() - start <= timeout do
+        local bg = model and model.Parent and model:FindFirstChild("BeingGripped", true)
+        local gripped = false
+        pcall(function()
+            if bg and (bg.Value == true or bg.Value == "ON" or bg.Value == 1) then
+                gripped = true
+            end
+        end)
+        if gripped then return true end
+        task.wait(0.15)
+    end
+    return false
+end
+
+function Knocked.retryGripUntilSuccess(model, maxAttempts)
+    maxAttempts = maxAttempts or 12
+    local bossRoot = Utils.getBossRoot(model)
+    if not bossRoot then return false end
+    
+    local dataEvent = GetDataEvent()
+    if not dataEvent then return false end
+    
+    for _ = 1, maxAttempts do
+        local pData = Utils.getPlayerData()
+        if pData then
+            pData.rootPart.CFrame = CFrame.new(bossRoot.Position)
+        end
+        
+        task.wait(0.08)
+        pcall(function() dataEvent:FireServer("Grip") end)
+        
+        if Knocked.waitForBeingGripped(model, 0.6) then
+            return true
+        end
+    end
+    return false
+end
+
+function Knocked.monitor(model)
+    if State.knockedThread then pcall(task.cancel, State.knockedThread) end
+    if not model then return end
+    
+    local settings = model:FindFirstChild("Settings")
+    if not settings then return end
+    local knocked = settings:FindFirstChild("Knocked")
+    if not knocked then return end
+    
+    State.knockedThread = task.spawn(function()
+        while State.running and model and model.Parent do
+            local isKnocked = false
+            pcall(function()
+                if knocked.Value == true
+                    or (type(knocked.Value) == "string" and knocked.Value:upper() == "ON")
+                    or (type(knocked.Value) == "number" and knocked.Value ~= 0) then
+                    isKnocked = true
+                end
+            end)
+            
+            if isKnocked then
+                Utils.notify("Boss knocked! Gripping...", 2)
+                
+                -- Stop positioning + attacking while we grip
+                if State.anchorConn then State.anchorConn:Disconnect(); State.anchorConn = nil end
+                if State.attackThread then pcall(task.cancel, State.attackThread); State.attackThread = nil end
+                Charging.stop()
+                
+                local success = Knocked.retryGripUntilSuccess(model, 12)
+                if success then
+                    Utils.notify("Grip confirmed!", 2)
+                else
+                    Utils.notify("Grip retry timed out.", 2)
+                end
+                
+                task.wait(0.5)
+                Farm.stopCurrent()
+                return
+            end
+            task.wait(0.2)
         end
     end)
-    table.insert(State.connections, conn)
-    return conn
 end
-function Teleport.toBoss(boss, config)
-    if not Utils.isValidBoss(boss) then return nil end
-    local bossRoot = boss:FindFirstChild("HumanoidRootPart")
-    if not bossRoot then return nil end
-    State.lastBossPosition = bossRoot.Position
-    local conn = RunService.Heartbeat:Connect(function()
+
+-- ============================================
+-- AUTO LOOT
+-- ============================================
+local Loot = {}
+
+function Loot.collectNearBoss(bossName, config)
+    local lootSpot = config.lootSpot
+    if not lootSpot then return end
+    
+    local pData = Utils.getPlayerData()
+    if not pData then return end
+    
+    Utils.log("Collecting loot for " .. bossName)
+    pData.rootPart.CFrame = CFrame.new(lootSpot)
+    task.wait(5)
+    
+    -- Re-get player data after wait
+    pData = Utils.getPlayerData()
+    if not pData then return end
+    pData.rootPart.CFrame = CFrame.new(lootSpot)
+    
+    local dataEvent = GetDataEvent()
+    if not dataEvent then return end
+    
+    local items = {}
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        if (obj:IsA("Model") or obj:IsA("BasePart")) and TrinketSet[obj.Name] then
+            local pos = nil
+            if obj:IsA("BasePart") then
+                pos = obj.Position
+            elseif obj:IsA("Model") then
+                local pp = obj.PrimaryPart or obj:FindFirstChildWhichIsA("BasePart")
+                if pp then pos = pp.Position end
+            end
+            
+            if pos and (lootSpot - pos).Magnitude <= 200 then
+                local idVal = obj:FindFirstChild("ID")
+                if not idVal then
+                    for _, d in ipairs(obj:GetDescendants()) do
+                        if d.Name == "ID" and d:IsA("NumberValue") then
+                            idVal = d
+                            break
+                        end
+                    end
+                end
+                if idVal then
+                    table.insert(items, {
+                        obj = obj, pos = pos, id = idVal.Value,
+                        dist = (lootSpot - pos).Magnitude
+                    })
+                end
+            end
+        end
+    end
+    
+    table.sort(items, function(a, b) return a.dist < b.dist end)
+    
+    for _, entry in ipairs(items) do
+        if not entry.obj.Parent then continue end
+        pData = Utils.getPlayerData()
+        if not pData then break end
+        
+        pData.rootPart.CFrame = CFrame.new(entry.pos + Vector3.new(0, 3, 0))
+        task.wait(0.3)
+        
+        -- Spam pickup
+        local spamEnd = tick() + 1.5
+        while tick() < spamEnd do
+            if not entry.obj.Parent then break end
+            pcall(function() dataEvent:FireServer("PickUp", entry.id) end)
+            task.wait(0.05)
+        end
+        task.wait(0.2)
+    end
+    
+    Utils.notify("Boss loot collected!", 2)
+end
+
+-- ============================================
+-- COMBAT (Dash + Attack)
+-- ============================================
+local Combat = {}
+
+function Combat.startAttacking(model)
+    State.attackThread = task.spawn(function()
+        local dataEvent = GetDataEvent()
+        while State.running and State.currentBoss do
+            if State.hyugaInVoid or State.hakuSafeSpot then
+                task.wait(0.2)
+                continue
+            end
+            
+            if dataEvent and model and model.Parent then
+                local bossRoot = Utils.getBossRoot(model)
+                if bossRoot then
+                    -- Dash toward boss first for extra damage
+                    pcall(function() dataEvent:FireServer("Dash", "Sub", bossRoot.Position) end)
+                    task.wait(0.05)
+                    -- Then melee hit
+                    pcall(function() dataEvent:FireServer("CheckMeleeHit", nil, "NormalAttack", false) end)
+                end
+            end
+            
+            task.wait(BossFarm.Settings.AttackInterval)
+        end
+    end)
+    return State.attackThread
+end
+
+function Combat.enableNoclip()
+    Utils.addConnection(RunService.Stepped:Connect(function()
         if not State.running then return end
         local pData = Utils.getPlayerData()
         if not pData then return end
-        if bossRoot and bossRoot.Parent then State.lastBossPosition = bossRoot.Position end
-        
-        if Animation.isDangerous(boss) then
-            local rType, safePos = Animation.getResponseType(boss)
-            if rType == "teleport" and safePos then
-                pData.rootPart.CFrame = CFrame.new(safePos)
-            else
-                local h = config.safeHeight or 30
-                local y = config.positionAbove and h or -h
-                pData.rootPart.CFrame = CFrame.new(State.lastBossPosition + Vector3.new(0, y, 0), State.lastBossPosition)
-            end
-        else
-            local h = config.farmHeight
-            local y = config.positionAbove and h or -h
-            pData.rootPart.CFrame = CFrame.new(State.lastBossPosition + Vector3.new(0, y, 0), State.lastBossPosition)
+        for _, part in pairs(pData.character:GetDescendants()) do
+            if part:IsA('BasePart') then part.CanCollide = false end
         end
-    end)
-    table.insert(State.connections, conn)
-    return conn
+    end))
 end
 
 -- ============================================
--- HTTP SERVER HOP SYSTEM (Remote Event)
+-- POSITIONING (Heartbeat anchor)
+-- ============================================
+local Positioning = {}
+
+function Positioning.startAnchoring(model, config)
+    State.anchorConn = RunService.Heartbeat:Connect(function()
+        pcall(function()
+            if not State.running then return end
+            
+            local hum = model:FindFirstChildOfClass("Humanoid")
+            if not hum or not hum.Parent or hum.Health <= 0 then
+                -- Boss died
+                local deadName = State.currentBoss
+                local deadConfig = config
+                Farm.stopCurrent()
+                
+                if BossFarm.Settings.AutoLootOnKill and deadConfig.lootSpot then
+                    task.spawn(function()
+                        pcall(Loot.collectNearBoss, deadName, deadConfig)
+                    end)
+                end
+                return
+            end
+            
+            local bossRoot = Utils.getBossRoot(model)
+            if not bossRoot then return end
+            State.lastBossPosition = bossRoot.Position
+            
+            local pData = Utils.getPlayerData()
+            if not pData then return end
+            
+            -- Haku safe spot timer check
+            if State.hakuSafeSpot and tick() >= State.hakuSafeSpotEndTime then
+                State.hakuSafeSpot = false
+            end
+            
+            -- Position logic
+            if State.hyugaInVoid then
+                pData.rootPart.CFrame = CFrame.new(HYUGA_VOID_SAFE_SPOT)
+            elseif State.hakuSafeSpot then
+                pData.rootPart.CFrame = CFrame.new(HAKU_SAFE_SPOT)
+            else
+                local totalHeight = (config.height or 15)
+                    + State.bossHeightBoost
+                    + State.weaponHeightBoost
+                
+                local yOffset = config.positionAbove and totalHeight or -totalHeight
+                
+                pData.rootPart.CFrame = CFrame.lookAt(
+                    bossRoot.Position + Vector3.new(0, yOffset, 0),
+                    bossRoot.Position
+                )
+            end
+        end)
+    end)
+    Utils.addConnection(State.anchorConn)
+end
+
+-- ============================================
+-- HTTP SERVER HOP SYSTEM
 -- ============================================
 local ServerHop = {}
 
 function ServerHop.join(serverId)
-    local events = ReplicatedStorage:FindFirstChild("Events")
-    local dataEvent = events and events:FindFirstChild("DataEvent")
+    local dataEvent = GetDataEvent()
     if dataEvent then
         Utils.log("Firing ServerTeleport to: " .. tostring(serverId))
         dataEvent:FireServer("ServerTeleport", serverId, 14)
     else
-        Utils.log("Error: DataEvent not found!")
+        Utils.log("Error: DataEvent not found!", "warn")
     end
 end
 
 function ServerHop.fetchServers()
     local allServers = {}
-    local cursor = ""
-    local pageNum = 1
-    
-    -- Limit to 2 pages to be fast
-    local maxPages = 1
-    
-    while pageNum <= maxPages do
-        local success, response = pcall(function()
-            local requestFunc = (syn and syn.request) or (http and http.request) or http_request or (fluxus and fluxus.request) or request
-            local url = string.format("https://roproxy-production-0200.up.railway.app/games/v1/games/%d/servers/0?sortOrder=2&excludeFullGames=false&limit=100", GAME_ID)
-            if cursor ~= "" then url = url .. "&cursor=" .. cursor end
-            if requestFunc then return requestFunc({Url = url, Method = "GET"}).Body else return game:HttpGet(url) end
-        end)
-        
-        if not success or not response then break end
-        
-        local jsonSuccess, data = pcall(HttpService.JSONDecode, HttpService, response)
-        if not jsonSuccess or not data or not data.data then break end
-        
-        for _, s in ipairs(data.data) do table.insert(allServers, s) end
-        if data.nextPageCursor and data.nextPageCursor ~= "" then 
-            cursor = data.nextPageCursor 
-            pageNum = pageNum + 1 
-            task.wait(0.1)
-        else 
-            break 
+    local success, response = pcall(function()
+        local requestFunc = (syn and syn.request) or (http and http.request) or http_request or (fluxus and fluxus.request) or request
+        local url = string.format("https://roproxy-production-0200.up.railway.app/games/v1/games/%d/servers/0?sortOrder=2&excludeFullGames=false&limit=100", GAME_ID)
+        if requestFunc then
+            return requestFunc({Url = url, Method = "GET"}).Body
+        else
+            return game:HttpGet(url)
         end
-    end
+    end)
+    
+    if not success or not response then return allServers end
+    
+    local jsonSuccess, data = pcall(HttpService.JSONDecode, HttpService, response)
+    if not jsonSuccess or not data or not data.data then return allServers end
+    
+    for _, s in ipairs(data.data) do table.insert(allServers, s) end
     return allServers
 end
 
 function ServerHop.execute()
     Utils.log("Initiating HTTP server hop...")
-    
     task.spawn(function()
         local servers = ServerHop.fetchServers()
         if #servers > 0 then
             local candidates = {}
             for _, s in ipairs(servers) do
                 if s.playing and s.maxPlayers and s.id ~= game.JobId then
-                    -- Look for servers with decent population but not full
                     if s.playing >= 5 and s.playing < (s.maxPlayers - 2) then
                         table.insert(candidates, s)
                     end
@@ -324,65 +1010,174 @@ function ServerHop.execute()
 end
 
 -- ============================================
--- COMBAT
+-- MAIN FARM LOGIC
 -- ============================================
-local Combat = {}
-function Combat.startAttacking()
-    local settings = BossFarm.Settings
-    return task.spawn(function()
-        while State.running and State.currentBoss do
-            task.wait(settings.AttackInterval)
-            if State.running and State.currentBoss then
-                pcall(function() dataEvent:FireServer("CheckMeleeHit", nil, "NormalAttack", false) end)
+Farm = {}
+
+function Farm.farmBoss(hum, model, bossName)
+    local pData = Utils.getPlayerData()
+    if not pData then return end
+    local config = BOSS_CONFIGS[bossName]
+    if not config then return end
+    
+    State.currentBoss = bossName
+    State.currentModel = model
+    State.currentHumanoid = hum
+    State.healthThreshold = pData.humanoid.MaxHealth * 0.5
+    
+    -- Detect and equip weapon
+    State.detectedWeapon = Weapons.scanHotbar()
+    State.weaponHeightBoost = WEAPON_HEIGHT_BOOSTS[State.detectedWeapon] or 0
+    Weapons.equip(State.detectedWeapon)
+    if State.detectedWeapon ~= "Fist" then
+        Utils.notify("Weapon: " .. State.detectedWeapon, 2)
+    end
+    
+    -- Setup per-boss animation monitors
+    AnimMonitors.setup(model, bossName, config)
+    
+    -- Monitor knocked state for auto-grip
+    Knocked.monitor(model)
+    
+    -- Start charging for bonus damage
+    task.wait(0.5)
+    Charging.start()
+    
+    Utils.notify("Farming: " .. bossName, 3)
+    
+    -- Start noclip, positioning, and attacking
+    Combat.enableNoclip()
+    Positioning.startAnchoring(model, config)
+    Combat.startAttacking(model)
+    
+    -- Health + safety monitor loop
+    local lastPlayerCheck = tick()
+    local lastChakraCheck = tick()
+    while State.running and State.currentBoss == bossName do
+        local cPData = Utils.getPlayerData()
+        if not cPData then break end
+        
+        -- Check if boss is still valid
+        if not hum or not hum.Parent or hum.Health <= 0 then break end
+        
+        -- Health threshold check
+        if cPData.humanoid.Health < State.healthThreshold then
+            Utils.notify("Health low! Retreating...", 3)
+            Farm.stopCurrent()
+            local pd = Utils.getPlayerData()
+            if pd then pd.rootPart.CFrame = CFrame.new(SECRET_SPOT) end
+            task.wait(3)
+            break
+        end
+        
+        -- Periodic player proximity check
+        if tick() - lastPlayerCheck >= 2 then
+            lastPlayerCheck = tick()
+            local contested = Safety.isBossContested(model, BossFarm.Settings.PlayerDetectionRadius)
+            if contested then
+                Utils.notify("Players nearby! Hiding...", 3)
+                Farm.stopCurrent()
+                local pd = Utils.getPlayerData()
+                if pd then pd.rootPart.CFrame = CFrame.new(SECRET_SPOT) end
+                task.wait(2)
+                break
             end
         end
-    end)
-end
-function Combat.enableNoclip()
-    local conn = RunService.Stepped:Connect(function()
-        if not State.running then return end
-        local pData = Utils.getPlayerData()
-        if not pData then return end
-        for _, part in pairs(pData.character:GetDescendants()) do
-            if part:IsA('BasePart') then part.CanCollide = false end
+        
+        -- Chakra Sense detection → auto server hop
+        if BossFarm.Settings.ServerHopIfChakraSense and tick() - lastChakraCheck >= 1 then
+            lastChakraCheck = tick()
+            local senseActive, sensePlayer = Safety.isChakraSenseActive()
+            if senseActive then
+                Utils.notify("⚠️ Chakra Sense detected (" .. sensePlayer .. ")! Hopping...", 4)
+                Farm.stop()
+                task.wait(1)
+                ServerHop.execute()
+                return -- Exit farmBoss entirely
+            end
         end
-    end)
-    table.insert(State.connections, conn)
-    return conn
+        
+        task.wait(BossFarm.Settings.HealthCheckInterval)
+    end
+end
+
+function Farm.stopCurrent()
+    -- Stop attack + positioning
+    Charging.stop()
+    if State.anchorConn then State.anchorConn:Disconnect(); State.anchorConn = nil end
+    if State.attackThread then pcall(task.cancel, State.attackThread); State.attackThread = nil end
+    if State.knockedThread then pcall(task.cancel, State.knockedThread); State.knockedThread = nil end
+    
+    -- Reset per-boss state
+    State.bossHeightBoost = 0
+    State.hyugaInVoid = false
+    State.hakuSafeSpot = false
+    State.weaponHeightBoost = 0
+    State.inDanger = false
+    State.currentBoss = nil
+    State.currentModel = nil
+    State.currentHumanoid = nil
+    
+    -- Disconnect all event connections and cancel threads
+    Utils.disconnectAll()
+    Utils.cancelAllThreads()
 end
 
 -- ============================================
--- MAIN LOOP
+-- SINGLE BOSS FARM (Original behavior, upgraded)
 -- ============================================
-local Farm = {}
 function Farm.start()
     if State.running then return end
     State.farmThread = task.spawn(function()
         State.running = true
         Utils.notify("Boss auto-farm started!", 3)
+        
         while BossFarm.Settings.Enabled and State.running do
-            Farm.cleanup()
-            local boss = Detection.findAnySelectedBoss()
-            if not boss then
+            Farm.stopCurrent()
+            
+            local hum, model, bossName = Detection.findAnySelectedBoss()
+            
+            if not hum then
+                -- Try triggering spawns for selected bosses
+                for name, isSelected in pairs(BossFarm.Settings.SelectedBosses) do
+                    if isSelected then
+                        local config = BOSS_CONFIGS[name]
+                        if config and config.triggerSpawn then
+                            Detection.triggerSpawnIfNeeded(name, config)
+                            hum, model = Detection.findBoss(name)
+                            if hum and model then
+                                bossName = name
+                                break
+                            end
+                        end
+                    end
+                end
+            end
+            
+            if not hum then
                 if BossFarm.Settings.ServerHopIfNoBoss then
                     Utils.notify("No bosses found! Hopping...", 3)
                     task.wait(2)
                     ServerHop.execute()
                     break
                 else
-                    task.wait(2) continue
+                    task.wait(2)
+                    continue
                 end
             end
             
-            local playerNearby, playerName = Detection.isPlayerNearby(boss, BossFarm.Settings.PlayerDetectionRadius)
-            if playerNearby then
-                Utils.log("Player nearby: " .. playerName)
-                task.wait(5) continue
+            -- Check if boss is contested
+            local contested = Safety.isBossContested(model, BossFarm.Settings.PlayerDetectionRadius)
+            if contested then
+                Utils.notify("Players nearby, waiting...", 3)
+                task.wait(5)
+                continue
             end
             
-            Farm.farmBoss(boss)
-            task.wait(0.5)
+            Farm.farmBoss(hum, model, bossName)
+            task.wait(1)
         end
+        
         State.running = false
     end)
 end
@@ -390,57 +1185,119 @@ end
 function Farm.stop()
     BossFarm.Settings.Enabled = false
     State.running = false
-    State.currentBoss = nil
-    Farm.cleanup()
-    if State.farmThread then task.cancel(State.farmThread) end
+    Farm.stopCurrent()
+    if State.farmThread then pcall(task.cancel, State.farmThread) end
     Utils.notify("Auto-farm stopped", 2)
 end
 
-function Farm.cleanup()
-    Utils.disconnectAll(State.connections)
-    for boss, _ in pairs(State.animationStates) do Animation.cleanup(boss) end
-end
+-- ============================================
+-- ADVANCED BOSS LOOP (Sequential multi-boss cycle)
+-- ============================================
+local BossLoop = {}
 
-function Farm.farmBoss(boss)
-    local pData = Utils.getPlayerData()
-    if not pData then return end
-    local config = BOSS_CONFIGS[boss.Name]
-    if not config then return end
-    
-    State.currentBoss = boss.Name
-    State.healthThreshold = pData.humanoid.MaxHealth * 0.5
-    
-    Animation.setup(boss, config)
-    Utils.notify("Farming " .. boss.Name, 3)
-    
-    local attackThread = Combat.startAttacking()
-    Combat.enableNoclip()
-    Teleport.toBoss(boss, config)
-    
-    local lastPlayerCheck = tick()
-    while State.running and State.currentBoss == boss.Name do
-        local cPData = Utils.getPlayerData()
-        if not cPData or not Utils.isValidBoss(boss) then break end
-        
-        if cPData.humanoid.Health < State.healthThreshold then
-            Farm.cleanup() Teleport.toSafeSpot(true) task.wait(3) break
-        end
-        
-        if tick() - lastPlayerCheck >= 2 then
-            lastPlayerCheck = tick()
-            local nearby = Detection.isPlayerNearby(boss, BossFarm.Settings.PlayerDetectionRadius)
-            if nearby then
-                Farm.cleanup() Teleport.toSafeSpot(true) task.wait(2) break
-            end
-        end
-        task.wait(BossFarm.Settings.HealthCheckInterval)
+function BossLoop.getSelectedList()
+    local list = {}
+    for bossName, enabled in pairs(BossFarm.Settings.SelectedBosses) do
+        if enabled then table.insert(list, bossName) end
     end
-    if attackThread then task.cancel(attackThread) end
-    Animation.cleanup(boss)
+    table.sort(list)
+    return list
 end
 
+function BossLoop.start()
+    if State.bossLoopThread then pcall(task.cancel, State.bossLoopThread) end
+    BossFarm.Settings.BossLoopEnabled = true
+    State.running = true
+    
+    State.bossLoopThread = task.spawn(function()
+        Utils.notify("Advanced Boss Loop started!", 3)
+        
+        while BossFarm.Settings.BossLoopEnabled and State.running do
+            local loopList = BossLoop.getSelectedList()
+            
+            if #loopList == 0 then
+                Utils.notify("No bosses selected for loop!", 3)
+                BossLoop.stop()
+                break
+            end
+            
+            -- Iterate through each selected boss
+            for _, bossName in ipairs(loopList) do
+                if not BossFarm.Settings.BossLoopEnabled or not State.running then break end
+                
+                -- Chakra Sense check before each boss
+                if BossFarm.Settings.ServerHopIfChakraSense then
+                    local senseActive, sensePlayer = Safety.isChakraSenseActive()
+                    if senseActive then
+                        Utils.notify("⚠️ Chakra Sense (" .. sensePlayer .. ")! Hopping...", 4)
+                        BossLoop.stop()
+                        task.wait(1)
+                        ServerHop.execute()
+                        return
+                    end
+                end
+                
+                local config = BOSS_CONFIGS[bossName]
+                if not config then continue end
+                
+                -- Wait for boss to spawn (trigger if needed)
+                local hum, model
+                if config.triggerSpawn then
+                    hum, model = Detection.waitForBossSpawn(bossName, config, 16)
+                else
+                    hum, model = Detection.findBoss(bossName)
+                end
+                
+                if not hum or not model then
+                    Utils.notify(bossName .. " unavailable, skipping...", 2)
+                    continue
+                end
+                
+                -- Check if contested
+                local contested = Safety.isBossContested(model, BossFarm.Settings.PlayerDetectionRadius)
+                if contested then
+                    Utils.notify("Players near " .. bossName .. ", skipping...", 3)
+                    continue
+                end
+                
+                -- Farm this boss
+                Farm.farmBoss(hum, model, bossName)
+                
+                task.wait(1)
+            end
+            
+            -- Full loop complete
+            if BossFarm.Settings.BossLoopEnabled and BossFarm.Settings.HopAfterLoop then
+                Utils.notify("Boss loop complete. Hopping...", 3)
+                ServerHop.execute()
+                return
+            end
+            
+            task.wait(2)
+        end
+        
+        State.running = false
+    end)
+end
+
+function BossLoop.stop()
+    BossFarm.Settings.BossLoopEnabled = false
+    State.running = false
+    Farm.stopCurrent()
+    if State.bossLoopThread then pcall(task.cancel, State.bossLoopThread); State.bossLoopThread = nil end
+    Utils.notify("Boss loop stopped", 2)
+end
+
+-- ============================================
+-- PUBLIC API
+-- ============================================
 BossFarm.start = Farm.start
 BossFarm.stop = Farm.stop
+BossFarm.startLoop = BossLoop.start
+BossFarm.stopLoop = BossLoop.stop
 BossFarm.bossDatabase = bossDatabase
+BossFarm.getDetectedWeapon = function() return State.detectedWeapon end
+BossFarm.isRunning = function() return State.running end
+BossFarm.getCurrentBoss = function() return State.currentBoss end
 
 return BossFarm

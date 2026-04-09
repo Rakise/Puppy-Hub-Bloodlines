@@ -8,6 +8,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
 local HttpService = game:GetService("HttpService")
+local VirtualInputManager = game:GetService("VirtualInputManager")
 
 local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
@@ -18,6 +19,8 @@ AutoFarmHandler.__index = AutoFarmHandler
 AutoFarmHandler.Settings = {
     AutoPickup = false,
     AutoSummon = false,
+    AutoSellFruits = false,
+    SellInterval = 3, -- Sell every N summon cycles
     PickupRange = 50,
     PickupDelay = 0.3,
     ServerHopOnDanger = true, -- Master switch
@@ -35,7 +38,8 @@ local State = {
     PickupThread = nil,
     SafetyThread = nil,
     IsDefending = false,
-    IsHopping = false
+    IsHopping = false,
+    SummonCycleCount = 0,
 }
 
 -- ============================================================================
@@ -193,6 +197,11 @@ AutoFarmHandler.executeServerHop = ServerHop.execute
 -- CLAY DOLL DEFENSE LOGIC
 -- ============================================================================
 
+local function getDataFunctionRemote()
+    local events = ReplicatedStorage:FindFirstChild("Events")
+    return events and events:FindFirstChild("DataFunction")
+end
+
 local function handleClayDoll(dollModel)
     if State.IsDefending then return end
     State.IsDefending = true
@@ -210,15 +219,31 @@ local function handleClayDoll(dollModel)
     local originalAnchored = root.Anchored
     root.Anchored = true
     
-    if keypress then keypress(0x46) end -- F Key
+    -- Start blocking via remote
+    local df = getDataFunctionRemote()
+    if df then
+        pcall(function() df:InvokeServer("Block") end)
+        print("[AutoFarm] 🛡️ Block activated via remote.")
+    end
 
-    -- Face the doll constantly
+    -- Face the doll and keep block active
     local defenseLoop = RunService.Heartbeat:Connect(function()
         if not dollModel or not dollModel.Parent then return end
         local dollRoot = dollModel:FindFirstChild("HumanoidRootPart") or dollModel.PrimaryPart
         if dollRoot and root then
             local lookPos = Vector3.new(dollRoot.Position.X, root.Position.Y, dollRoot.Position.Z)
             root.CFrame = CFrame.lookAt(root.Position, lookPos)
+        end
+    end)
+    
+    -- Spam block remote to keep it held
+    local blockSpamThread = task.spawn(function()
+        while State.IsDefending and dollModel and dollModel.Parent do
+            pcall(function()
+                local dfr = getDataFunctionRemote()
+                if dfr then dfr:InvokeServer("Block") end
+            end)
+            task.wait(0.5)
         end
     end)
 
@@ -230,7 +255,7 @@ local function handleClayDoll(dollModel)
     end
 
     if defenseLoop then defenseLoop:Disconnect() end
-    if keyrelease then keyrelease(0x46) end
+    if blockSpamThread then pcall(task.cancel, blockSpamThread) end
     if root then root.Anchored = originalAnchored end
 
     print("[AutoFarm] ✅ Clay Doll neutralized. Resuming farm.")
@@ -266,72 +291,197 @@ end
 
 -- ============================================================================
 -- SUMMON MACRO (Hardcoded 16s Loop)
+-- Tools in this game are virtual — no Tool instances exist.
+-- We equip via DataEvent:FireServer("Item", "Selected", name) then click to use.
 -- ============================================================================
 
-local function clickSkillSlot()
-    local clientGui = PlayerGui:FindFirstChild("ClientGui")
-    if not clientGui then return false end
-    local mainframe = clientGui:FindFirstChild("Mainframe")
-    if not mainframe then return false end
-    local loadout = mainframe:FindFirstChild("Loadout")
-    if not loadout then return false end
-    
-    for _, slot in ipairs(loadout:GetChildren()) do
-        if slot:IsA("ImageButton") and (string.find(slot.Name, "Slot") or string.find(slot.Name, "Key")) then
-            local slotText = slot:FindFirstChild("SlotText")
-            if slotText and string.find(string.lower(slotText.Text), "fruit summoning") then
-                if firesignal then
-                    firesignal(slot.MouseButton1Down)
-                    task.wait(0.05)
-                    firesignal(slot.MouseButton1Up)
-                end
-                task.wait(0.3)
-                if mouse1click then mouse1click() end
-                return true
-            end
-        end
+local FRUIT_SUMMON_TOOL_NAME = "Fruit Summoning"
+
+local function getDataEvent()
+    local events = ReplicatedStorage:FindFirstChild("Events")
+    return events and events:FindFirstChild("DataEvent")
+end
+
+local function equipFruitSummonTool()
+    local dataEvent = getDataEvent()
+    if not dataEvent then
+        warn("[AutoFarm] DataEvent not found! Cannot equip tool.")
+        return false
     end
-    return false
+    
+    local ok, err = pcall(function()
+        dataEvent:FireServer("Item", "Selected", FRUIT_SUMMON_TOOL_NAME)
+    end)
+    
+    if not ok then
+        warn("[AutoFarm] Failed to equip Fruit Summoning: " .. tostring(err))
+        return false
+    end
+    
+    print("[AutoFarm] Equipped: " .. FRUIT_SUMMON_TOOL_NAME)
+    return true
+end
+
+local function useFruitSummonTool()
+    -- Equip the virtual tool first
+    if not equipFruitSummonTool() then return false end
+    task.wait(0.3)
+    
+    -- Activate via mouse click (simulates using the equipped tool)
+    pcall(function()
+        if mouse1click then
+            mouse1click()
+        elseif VirtualInputManager then
+            VirtualInputManager:SendMouseButtonEvent(400, 400, 0, true, game, 0)
+            task.wait(0.05)
+            VirtualInputManager:SendMouseButtonEvent(400, 400, 0, false, game, 0)
+        end
+    end)
+    
+    return true
 end
 
 local function summonLoop()
+    State.SummonCycleCount = 0
     while AutoFarmHandler.Settings.AutoSummon do
         if State.IsDefending or State.IsHopping then 
             task.wait(0.5) 
             continue 
         end
 
-        local success = clickSkillSlot()
+        local success = useFruitSummonTool()
         
         if success then
-            print("[AutoFarm] Summon used. Waiting 16s cooldown...")
+            State.SummonCycleCount = State.SummonCycleCount + 1
+            print("[AutoFarm] Summon used (cycle " .. State.SummonCycleCount .. "). Waiting 16s cooldown...")
             for i = 1, 160 do
                 if not AutoFarmHandler.Settings.AutoSummon then return end
                 task.wait(0.1)
             end
             print("[AutoFarm] Cooldown finished.")
+            
+            -- Auto-sell fruits periodically
+            if AutoFarmHandler.Settings.AutoSellFruits then
+                if State.SummonCycleCount % AutoFarmHandler.Settings.SellInterval == 0 then
+                    AutoFarmHandler.bulkSellFruits()
+                end
+            end
         else
+            warn("[AutoFarm] Summon failed, retrying in 2s...")
             task.wait(2)
         end
     end
 end
 
 -- ============================================================================
--- AUTO PICKUP LOGIC
+-- BULK SELL FRUITS (Ported from JitlerHub)
 -- ============================================================================
 
-local function isValidPickup(obj)
+local function getDataFunction()
+    local events = ReplicatedStorage:FindFirstChild("Events")
+    return events and events:FindFirstChild("DataFunction")
+end
+
+function AutoFarmHandler.bulkSellFruits()
+    local ok, err = pcall(function()
+        local df = getDataFunction()
+        if not df then error("DataFunction not found") end
+        
+        -- Find the fish NPC target in workspace (used as sell target)
+        local fishTarget = nil
+        pcall(function()
+            -- The fish NPC is typically around index 68 in workspace children
+            -- but we search more robustly by looking for common fish NPC patterns
+            for _, child in ipairs(Workspace:GetChildren()) do
+                if child:IsA("Model") and child:FindFirstChild("HumanoidRootPart") then
+                    if string.find(string.lower(child.Name), "fish") then
+                        fishTarget = child:FindFirstChild("HumanoidRootPart")
+                        break
+                    end
+                end
+            end
+            -- Fallback: try workspace children index approach like JitlerHub
+            if not fishTarget then
+                local children = Workspace:GetChildren()
+                if children[68] and children[68]:FindFirstChild("HumanoidRootPart") then
+                    fishTarget = children[68]:FindFirstChild("HumanoidRootPart")
+                end
+            end
+        end)
+        
+        df:InvokeServer("SellingBulk", 0, "Fruit", "Fish", fishTarget)
+    end)
+    
+    if ok then
+        print("[AutoFarm] ✅ Bulk sold all Fruits!")
+        pcall(function()
+            game:GetService("StarterGui"):SetCore("SendNotification", {
+                Title = "Auto Farm"; Text = "Fruits sold!"; Duration = 2;
+            })
+        end)
+    else
+        warn("[AutoFarm] Fruit sell failed: " .. tostring(err))
+    end
+end
+
+-- ============================================================================
+-- AUTO PICKUP LOGIC
+-- Fruits spawn as MeshPart in workspace.
+-- Inside has a StringValue with .Name == LocalPlayer.Name (ownership check)
+-- Inside has a ClickDetector called "ItemDetector"
+-- ============================================================================
+
+local function isValidFruitPickup(obj)
+    -- Must be a MeshPart (fruit) or BasePart
+    if not obj:IsA("BasePart") then return false end
+    
+    -- Must have an ItemDetector ClickDetector
     local detector = obj:FindFirstChild("ItemDetector")
-    if detector and detector:IsA("ClickDetector") then return true end
+    if not detector or not detector:IsA("ClickDetector") then return false end
+    
+    -- Must have a StringValue with our player name (ownership check)
+    local playerName = LocalPlayer.Name
+    for _, child in ipairs(obj:GetChildren()) do
+        if child:IsA("StringValue") and child.Name == playerName then
+            return true
+        end
+    end
+    
     return false
 end
-local function addToCache(child) if isValidPickup(child) then State.PickupCache[child] = true end end
+
+local function addToCache(child)
+    if isValidFruitPickup(child) then
+        State.PickupCache[child] = true
+        print("[AutoFarm] 🍎 Fruit detected & cached: " .. child.Name)
+    end
+end
 
 local function startTracking()
-    task.spawn(function() for _, child in ipairs(Workspace:GetChildren()) do addToCache(child) end end)
-    State.Connections.Tracking = Workspace.ChildAdded:Connect(function(child) task.delay(0.5, function() if child.Parent then addToCache(child) end end) end)
-    State.Connections.Removing = Workspace.ChildRemoved:Connect(function(child) if State.PickupCache[child] then State.PickupCache[child] = nil end end)
+    -- Scan existing workspace children
+    task.spawn(function()
+        for _, child in ipairs(Workspace:GetChildren()) do
+            addToCache(child)
+        end
+    end)
+    
+    -- Watch for new children (fruits spawn as MeshPart)
+    State.Connections.Tracking = Workspace.ChildAdded:Connect(function(child)
+        -- Small delay to let the StringValue and ClickDetector replicate
+        task.delay(0.5, function()
+            if child.Parent then
+                addToCache(child)
+            end
+        end)
+    end)
+    
+    State.Connections.Removing = Workspace.ChildRemoved:Connect(function(child)
+        if State.PickupCache[child] then
+            State.PickupCache[child] = nil
+        end
+    end)
 end
+
 local function stopTracking()
     if State.Connections.Tracking then State.Connections.Tracking:Disconnect() end
     if State.Connections.Removing then State.Connections.Removing:Disconnect() end
@@ -358,13 +508,15 @@ local function doPickup()
         
         -- Double check item validity (it might have been removed during a previous wait)
         if State.PickupCache[item] and item.Parent then
-            local itemPos = nil
-            if item:IsA("BasePart") then itemPos = item.Position elseif item:IsA("Model") then itemPos = item:GetPivot().Position end
+            local itemPos = item.Position -- We know it's a BasePart
             
             if itemPos and (root.Position - itemPos).Magnitude <= range then
                 local detector = item:FindFirstChild("ItemDetector")
                 if detector and detector:IsA("ClickDetector") then
-                    if fireclickdetector then fireclickdetector(detector, (root.Position - itemPos).Magnitude) end
+                    if fireclickdetector then
+                        fireclickdetector(detector, (root.Position - itemPos).Magnitude)
+                        print("[AutoFarm] ✅ Picked up fruit: " .. item.Name)
+                    end
                     task.wait(AutoFarmHandler.Settings.PickupDelay)
                 end
             end

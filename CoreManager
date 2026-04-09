@@ -193,8 +193,17 @@ end
 local Config = { 
     AutoSummon = false, 
     AutoPickup = false,
+    AutoSellFruits = false,
     ServerHopOnDanger = true,
-    ServerHopOnChakraSense = true -- New Setting
+    ServerHopOnChakraSense = true,
+    -- Boss Farm persistence (for overnight / cross-hop)
+    BossFarmEnabled = false,
+    BossLoopEnabled = false,
+    BossSelectedBosses = {},
+    BossServerHopIfNoBoss = false,
+    BossServerHopIfChakraSense = false,
+    BossHopAfterLoop = false,
+    BossAutoLootOnKill = false,
 }
 
 local function SaveConfig()
@@ -217,6 +226,16 @@ local function LoadConfig()
             if decoded.ServerHopOnChakraSense ~= nil then
                 Config.ServerHopOnChakraSense = decoded.ServerHopOnChakraSense
             end
+            -- Boss Farm
+            if decoded.BossFarmEnabled ~= nil then Config.BossFarmEnabled = decoded.BossFarmEnabled end
+            if decoded.BossLoopEnabled ~= nil then Config.BossLoopEnabled = decoded.BossLoopEnabled end
+            if decoded.BossSelectedBosses ~= nil then Config.BossSelectedBosses = decoded.BossSelectedBosses end
+            if decoded.BossServerHopIfNoBoss ~= nil then Config.BossServerHopIfNoBoss = decoded.BossServerHopIfNoBoss end
+            if decoded.BossServerHopIfChakraSense ~= nil then Config.BossServerHopIfChakraSense = decoded.BossServerHopIfChakraSense end
+            if decoded.BossHopAfterLoop ~= nil then Config.BossHopAfterLoop = decoded.BossHopAfterLoop end
+            if decoded.BossAutoLootOnKill ~= nil then Config.BossAutoLootOnKill = decoded.BossAutoLootOnKill end
+            -- Auto Sell
+            if decoded.AutoSellFruits ~= nil then Config.AutoSellFruits = decoded.AutoSellFruits end
         end
     end
 end
@@ -306,8 +325,31 @@ local function AutoLoginRoutine()
         -- Sync settings
         AutoFarmHandler.Settings.ServerHopOnDanger = Config.ServerHopOnDanger
         AutoFarmHandler.Settings.ServerHopOnChakraSense = Config.ServerHopOnChakraSense
+        AutoFarmHandler.Settings.AutoSellFruits = Config.AutoSellFruits
         
         AutoFarmHandler.toggleSummon(true)
+    end
+    
+    -- Auto-resume Boss Farm after server hop
+    if BossFarm and (Config.BossFarmEnabled or Config.BossLoopEnabled) then
+        print("[PuppyHub] Resuming Boss Farm...")
+        -- Restore all settings
+        BossFarm.Settings.SelectedBosses = Config.BossSelectedBosses or {}
+        BossFarm.Settings.ServerHopIfNoBoss = Config.BossServerHopIfNoBoss
+        BossFarm.Settings.ServerHopIfChakraSense = Config.BossServerHopIfChakraSense
+        BossFarm.Settings.HopAfterLoop = Config.BossHopAfterLoop
+        BossFarm.Settings.AutoLootOnKill = Config.BossAutoLootOnKill
+        
+        task.wait(2) -- Let game fully load
+        
+        if Config.BossLoopEnabled then
+            print("[PuppyHub] Starting Advanced Boss Loop...")
+            BossFarm.startLoop()
+        elseif Config.BossFarmEnabled then
+            print("[PuppyHub] Starting Single Boss Farm...")
+            BossFarm.Settings.Enabled = true
+            BossFarm.start()
+        end
     end
 end
 
@@ -316,8 +358,18 @@ if AutoFarmHandler then
     AutoFarmHandler.Settings.ServerHopOnDanger = Config.ServerHopOnDanger
     AutoFarmHandler.Settings.ServerHopOnChakraSense = Config.ServerHopOnChakraSense
 end
+if BossFarm then
+    BossFarm.Settings.ServerHopIfChakraSense = Config.BossServerHopIfChakraSense
+    BossFarm.Settings.ServerHopIfNoBoss = Config.BossServerHopIfNoBoss
+    BossFarm.Settings.HopAfterLoop = Config.BossHopAfterLoop
+    BossFarm.Settings.AutoLootOnKill = Config.BossAutoLootOnKill
+    BossFarm.Settings.SelectedBosses = Config.BossSelectedBosses or {}
+end
 
-if Config.AutoSummon then task.spawn(AutoLoginRoutine) end
+-- Auto-login if we have anything to resume (summon OR boss farm)
+if Config.AutoSummon or Config.BossFarmEnabled or Config.BossLoopEnabled then
+    task.spawn(AutoLoginRoutine)
+end
 
 -- ============================================================================
 -- UI SETUP & TAB GROUPS
@@ -566,8 +618,38 @@ if BossFarm and AutoFarmHandler then
             AutoFarmHandler.Settings.PickupRange = val
         end
     })
+
+    FarmLeft:AddDivider()
+
+    FarmLeft:AddToggle('AutoSellFruits', {
+        Text = 'Auto Sell Fruits',
+        Default = Config.AutoSellFruits or false,
+        Tooltip = 'Automatically bulk-sells fruits every N summon cycles.',
+        Callback = function(val)
+            AutoFarmHandler.Settings.AutoSellFruits = val
+            Config.AutoSellFruits = val
+            SaveConfig()
+        end
+    })
+
+    FarmLeft:AddSlider('SellInterval', {
+        Text = 'Sell Every N Cycles',
+        Default = 3,
+        Min = 1,
+        Max = 10,
+        Rounding = 0,
+        Tooltip = 'How many summon cycles between each auto-sell.',
+        Callback = function(val)
+            AutoFarmHandler.Settings.SellInterval = val
+        end
+    })
+
+    FarmLeft:AddButton('Sell Fruits Now', function()
+        if AutoFarmHandler then AutoFarmHandler.bulkSellFruits() end
+    end)
     
     -- Debugging Section in Auto Farm
+    FarmLeft:AddDivider()
     FarmLeft:AddLabel("Debug & Testing")
     
     FarmLeft:AddButton('Force Server Hop (Danger)', function() 
@@ -591,13 +673,43 @@ if BossFarm and AutoFarmHandler then
 
     FarmRight:AddToggle('BossFarmEnabled', {
         Text = 'Enable Boss Farm',
-        Default = false,
+        Default = Config.BossFarmEnabled or false,
+        Tooltip = 'Single-pass: farms first selected boss found.',
         Callback = function(val)
+            -- Disable boss loop if turning on single farm
+            if val and BossFarm.Settings.BossLoopEnabled then
+                BossFarm.stopLoop()
+                Config.BossLoopEnabled = false
+                if Toggles.BossLoopToggle then Toggles.BossLoopToggle:SetValue(false) end
+            end
             BossFarm.Settings.Enabled = val
+            Config.BossFarmEnabled = val
+            SaveConfig()
             if val then
                 BossFarm.start()
             else
                 BossFarm.stop()
+            end
+        end
+    })
+
+    FarmRight:AddToggle('BossLoopToggle', {
+        Text = 'Advanced Boss Loop',
+        Default = Config.BossLoopEnabled or false,
+        Tooltip = 'Cycles through ALL selected bosses sequentially, then optionally hops.',
+        Callback = function(val)
+            -- Disable single farm if turning on loop
+            if val and BossFarm.Settings.Enabled then
+                BossFarm.stop()
+                Config.BossFarmEnabled = false
+                if Toggles.BossFarmEnabled then Toggles.BossFarmEnabled:SetValue(false) end
+            end
+            Config.BossLoopEnabled = val
+            SaveConfig()
+            if val then
+                BossFarm.startLoop()
+            else
+                BossFarm.stopLoop()
             end
         end
     })
@@ -609,24 +721,70 @@ if BossFarm and AutoFarmHandler then
         Text = 'Select Bosses',
         Callback = function(val)
             BossFarm.Settings.SelectedBosses = val
+            Config.BossSelectedBosses = val
+            SaveConfig()
+        end
+    })
+
+    FarmRight:AddDivider()
+
+    FarmRight:AddToggle('AutoLootToggle', {
+        Text = 'Auto-Loot On Kill',
+        Default = Config.BossAutoLootOnKill or false,
+        Tooltip = 'Teleports to loot spot after boss dies and collects trinkets.',
+        Callback = function(val)
+            BossFarm.Settings.AutoLootOnKill = val
+            Config.BossAutoLootOnKill = val
+            SaveConfig()
         end
     })
 
     FarmRight:AddToggle('ServerHopBoss', {
         Text = 'Hop If No Boss',
-        Default = false,
+        Default = Config.BossServerHopIfNoBoss or false,
         Callback = function(val)
             BossFarm.Settings.ServerHopIfNoBoss = val
+            Config.BossServerHopIfNoBoss = val
+            SaveConfig()
+        end
+    })
+
+    FarmRight:AddToggle('HopAfterLoop', {
+        Text = 'Hop After Full Loop',
+        Default = Config.BossHopAfterLoop or false,
+        Tooltip = 'Server hops after cycling through all selected bosses.',
+        Callback = function(val)
+            BossFarm.Settings.HopAfterLoop = val
+            Config.BossHopAfterLoop = val
+            SaveConfig()
         end
     })
 
     FarmRight:AddToggle('ServerHopChakra', {
         Text = 'Hop On Chakra Sense',
-        Default = false,
+        Default = Config.BossServerHopIfChakraSense or false,
         Callback = function(val)
             BossFarm.Settings.ServerHopIfChakraSense = val
+            Config.BossServerHopIfChakraSense = val
+            SaveConfig()
         end
     })
+
+    FarmRight:AddDivider()
+    
+    local WeaponLabel = FarmRight:AddLabel("Weapon: (starts on farm)")
+    -- Update weapon label when farm starts
+    task.spawn(function()
+        while task.wait(2) do
+            if BossFarm.isRunning() then
+                local weapon = BossFarm.getDetectedWeapon()
+                local boss = BossFarm.getCurrentBoss() or "None"
+                WeaponLabel:SetText("⚔ " .. weapon .. " | 🎯 " .. boss)
+            else
+                WeaponLabel:SetText("Weapon: (idle)")
+            end
+        end
+    end)
 end
 
 -- ============================================================================
