@@ -256,6 +256,24 @@ local function handleClayDoll(dollModel)
     if blockSpamThread then pcall(task.cancel, blockSpamThread) end
     if root then root.Anchored = originalAnchored end
 
+    -- Unblock via KeyPress F (0x46)
+    if keypress and keyrelease then
+        pcall(function()
+            keypress(0x46)
+            task.wait(0.1)
+            keyrelease(0x46)
+            
+            task.wait(0.1)
+            
+            keypress(0x46)
+            task.wait(0.1)
+            keyrelease(0x46)
+        end)
+        print("[AutoFarm] 🛡️ Simulated 'F' key presses to unblock.")
+    else
+        warn("[AutoFarm] Executor missing keypress/keyrelease functions. Character may remain blocking.")
+    end
+
     print("[AutoFarm] ✅ Clay Doll neutralized. Resuming farm.")
     State.IsDefending = false
 end
