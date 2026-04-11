@@ -497,8 +497,6 @@ local function summonLoop()
     end
 end
 
-
-
 -- ============================================================================
 -- AUTO PICKUP LOGIC
 -- Fruits spawn as MeshPart in workspace.
@@ -523,7 +521,7 @@ local function isValidFruitPickup(obj)
     end
     
     return false
-
+end
 
 local function addToCache(child)
     if isValidFruitPickup(child) then
