@@ -193,7 +193,7 @@ end
 local Config = { 
     AutoSummon = false, 
     AutoPickup = false,
-    AutoSellFruits = false,
+
     ServerHopOnDanger = true,
     ServerHopOnChakraSense = true,
     -- Boss Farm persistence (for overnight / cross-hop)
@@ -234,8 +234,7 @@ local function LoadConfig()
             if decoded.BossServerHopIfChakraSense ~= nil then Config.BossServerHopIfChakraSense = decoded.BossServerHopIfChakraSense end
             if decoded.BossHopAfterLoop ~= nil then Config.BossHopAfterLoop = decoded.BossHopAfterLoop end
             if decoded.BossAutoLootOnKill ~= nil then Config.BossAutoLootOnKill = decoded.BossAutoLootOnKill end
-            -- Auto Sell
-            if decoded.AutoSellFruits ~= nil then Config.AutoSellFruits = decoded.AutoSellFruits end
+
         end
     end
 end
@@ -325,7 +324,7 @@ local function AutoLoginRoutine()
         -- Sync settings
         AutoFarmHandler.Settings.ServerHopOnDanger = Config.ServerHopOnDanger
         AutoFarmHandler.Settings.ServerHopOnChakraSense = Config.ServerHopOnChakraSense
-        AutoFarmHandler.Settings.AutoSellFruits = Config.AutoSellFruits
+
         
         AutoFarmHandler.toggleSummon(true)
     end
@@ -619,34 +618,7 @@ if BossFarm and AutoFarmHandler then
         end
     })
 
-    FarmLeft:AddDivider()
 
-    FarmLeft:AddToggle('AutoSellFruits', {
-        Text = 'Auto Sell Fruits',
-        Default = Config.AutoSellFruits or false,
-        Tooltip = 'Automatically bulk-sells fruits every N summon cycles.',
-        Callback = function(val)
-            AutoFarmHandler.Settings.AutoSellFruits = val
-            Config.AutoSellFruits = val
-            SaveConfig()
-        end
-    })
-
-    FarmLeft:AddSlider('SellInterval', {
-        Text = 'Sell Every N Cycles',
-        Default = 3,
-        Min = 1,
-        Max = 10,
-        Rounding = 0,
-        Tooltip = 'How many summon cycles between each auto-sell.',
-        Callback = function(val)
-            AutoFarmHandler.Settings.SellInterval = val
-        end
-    })
-
-    FarmLeft:AddButton('Sell Fruits Now', function()
-        if AutoFarmHandler then AutoFarmHandler.bulkSellFruits() end
-    end)
     
     -- Debugging Section in Auto Farm
     FarmLeft:AddDivider()

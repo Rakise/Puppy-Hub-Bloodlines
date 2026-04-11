@@ -19,10 +19,9 @@ AutoFarmHandler.__index = AutoFarmHandler
 AutoFarmHandler.Settings = {
     AutoPickup = false,
     AutoSummon = false,
-    AutoSellFruits = false,
-    SellInterval = 3, -- Sell every N summon cycles
     PickupRange = 50,
     PickupDelay = 0.3,
+    MouseMoveTime = 0.3, -- Time in seconds to smoothly move mouse to fruit
     ServerHopOnDanger = true, -- Master switch
     ServerHopOnChakraSense = true, -- Specific switch for Chakra Sense
     DangerRadius = 300
@@ -39,7 +38,6 @@ local State = {
     SafetyThread = nil,
     IsDefending = false,
     IsHopping = false,
-    SummonCycleCount = 0,
 }
 
 -- ============================================================================
@@ -295,14 +293,119 @@ end
 -- We equip via DataEvent:FireServer("Item", "Selected", name) then click to use.
 -- ============================================================================
 
-local FRUIT_SUMMON_TOOL_NAME = "Fruit Summoning"
+local HOTBAR_MAX_SLOTS = 11
+local FRUIT_SUMMON_TOOL_CANDIDATES = {
+    "Fruit Summoning",
+    "Fruit Summon",
+    "Summon Fruit",
+    "Fruit Summon Tool",
+}
+local HOTBAR_KEYBINDS = {
+    [1] = Enum.KeyCode.One,
+    [2] = Enum.KeyCode.Two,
+    [3] = Enum.KeyCode.Three,
+    [4] = Enum.KeyCode.Four,
+    [5] = Enum.KeyCode.Five,
+    [6] = Enum.KeyCode.Six,
+    [7] = Enum.KeyCode.Seven,
+    [8] = Enum.KeyCode.Eight,
+    [9] = Enum.KeyCode.Nine,
+    [10] = Enum.KeyCode.Zero,
+    [11] = Enum.KeyCode.Minus,
+}
 
 local function getDataEvent()
     local events = ReplicatedStorage:FindFirstChild("Events")
     return events and events:FindFirstChild("DataEvent")
 end
 
-local function equipFruitSummonTool()
+local function getLoadout()
+    local clientGui = PlayerGui and PlayerGui:FindFirstChild("ClientGui")
+    local mainframe = clientGui and clientGui:FindFirstChild("Mainframe")
+    return mainframe and mainframe:FindFirstChild("Loadout")
+end
+
+local function normalizeName(name)
+    if type(name) ~= "string" then return "" end
+    return string.lower((name:gsub("%s+", " "):gsub("^%s+", ""):gsub("%s+$", "")))
+end
+
+local function isFruitSummonName(name)
+    local normalized = normalizeName(name)
+    if normalized == "" then return false end
+
+    for _, candidate in ipairs(FRUIT_SUMMON_TOOL_CANDIDATES) do
+        if normalized == normalizeName(candidate) then
+            return true
+        end
+    end
+
+    return normalized:find("fruit", 1, true) and normalized:find("summon", 1, true)
+end
+
+local function findFruitSummonSlot()
+    local loadout = getLoadout()
+    if not loadout then return nil end
+
+    for slotIndex = 1, HOTBAR_MAX_SLOTS do
+        local slot = loadout:FindFirstChild("Slot" .. slotIndex)
+        local slotText = slot and slot:FindFirstChild("SlotText")
+        local itemName = slotText and slotText:IsA("TextLabel") and slotText.Text or ""
+        if isFruitSummonName(itemName) then
+            return {
+                index = slotIndex,
+                slot = slot,
+                itemName = itemName,
+            }
+        end
+    end
+end
+
+local function activateHotbarSlot(slotInfo)
+    if not slotInfo or not slotInfo.slot then return false end
+
+    local success = false
+
+    local keyCode = HOTBAR_KEYBINDS[slotInfo.index]
+    if keyCode and VirtualInputManager then
+        pcall(function()
+            VirtualInputManager:SendKeyEvent(true, keyCode, false, game)
+            task.wait(0.05)
+            VirtualInputManager:SendKeyEvent(false, keyCode, false, game)
+            success = true
+        end)
+    end
+
+    local function trySignal(instance, signalName)
+        if success or not instance or not firesignal then return end
+        local signal = instance[signalName]
+        if typeof(signal) ~= "RBXScriptSignal" then return end
+
+        local ok = pcall(firesignal, signal)
+        if ok then
+            success = true
+        end
+    end
+
+    trySignal(slotInfo.slot, "MouseButton1Click")
+    trySignal(slotInfo.slot, "Activated")
+
+    for _, descendant in ipairs(slotInfo.slot:GetDescendants()) do
+        if descendant:IsA("GuiButton") then
+            trySignal(descendant, "MouseButton1Click")
+            trySignal(descendant, "Activated")
+            if success then break end
+        end
+    end
+
+    if success then
+        task.wait(0.15)
+    end
+
+    return success
+end
+
+local function selectFruitSummonTool(toolName)
     local dataEvent = getDataEvent()
     if not dataEvent then
         warn("[AutoFarm] DataEvent not found! Cannot equip tool.")
@@ -310,24 +413,28 @@ local function equipFruitSummonTool()
     end
     
     local ok, err = pcall(function()
-        dataEvent:FireServer("Item", "Selected", FRUIT_SUMMON_TOOL_NAME)
+        dataEvent:FireServer("Item", "Selected", toolName)
     end)
     
     if not ok then
-        warn("[AutoFarm] Failed to equip Fruit Summoning: " .. tostring(err))
+        warn("[AutoFarm] Failed to equip fruit summon item (" .. tostring(toolName) .. "): " .. tostring(err))
         return false
     end
     
-    print("[AutoFarm] Equipped: " .. FRUIT_SUMMON_TOOL_NAME)
+    print("[AutoFarm] Equipped: " .. tostring(toolName))
     return true
 end
 
-local function useFruitSummonTool()
-    -- Equip the virtual tool first
-    if not equipFruitSummonTool() then return false end
-    task.wait(0.3)
-    
-    -- Activate via mouse click (simulates using the equipped tool)
+local function resolveFruitSummonTool()
+    local slotInfo = findFruitSummonSlot()
+    if slotInfo then
+        return slotInfo.itemName, slotInfo
+    end
+
+    return FRUIT_SUMMON_TOOL_CANDIDATES[1], nil
+end
+
+local function clickEquippedTool()
     pcall(function()
         if mouse1click then
             mouse1click()
@@ -337,12 +444,25 @@ local function useFruitSummonTool()
             VirtualInputManager:SendMouseButtonEvent(400, 400, 0, false, game, 0)
         end
     end)
+end
+
+local function useFruitSummonTool()
+    local toolName, slotInfo = resolveFruitSummonTool()
+    if not toolName then
+        warn("[AutoFarm] Fruit summon item was not found in the hotbar.")
+        return false
+    end
+
+    local activatedHotbar = activateHotbarSlot(slotInfo)
+    if not selectFruitSummonTool(toolName) then return false end
+
+    task.wait(activatedHotbar and 0.15 or 0.3)
+    clickEquippedTool()
     
     return true
 end
 
 local function summonLoop()
-    State.SummonCycleCount = 0
     while AutoFarmHandler.Settings.AutoSummon do
         if State.IsDefending or State.IsHopping then 
             task.wait(0.5) 
@@ -352,20 +472,12 @@ local function summonLoop()
         local success = useFruitSummonTool()
         
         if success then
-            State.SummonCycleCount = State.SummonCycleCount + 1
-            print("[AutoFarm] Summon used (cycle " .. State.SummonCycleCount .. "). Waiting 16s cooldown...")
+            print("[AutoFarm] Summon used. Waiting 16s cooldown...")
             for i = 1, 160 do
                 if not AutoFarmHandler.Settings.AutoSummon then return end
                 task.wait(0.1)
             end
             print("[AutoFarm] Cooldown finished.")
-            
-            -- Auto-sell fruits periodically
-            if AutoFarmHandler.Settings.AutoSellFruits then
-                if State.SummonCycleCount % AutoFarmHandler.Settings.SellInterval == 0 then
-                    AutoFarmHandler.bulkSellFruits()
-                end
-            end
         else
             warn("[AutoFarm] Summon failed, retrying in 2s...")
             task.wait(2)
@@ -373,56 +485,7 @@ local function summonLoop()
     end
 end
 
--- ============================================================================
--- BULK SELL FRUITS (Ported from JitlerHub)
--- ============================================================================
 
-local function getDataFunction()
-    local events = ReplicatedStorage:FindFirstChild("Events")
-    return events and events:FindFirstChild("DataFunction")
-end
-
-function AutoFarmHandler.bulkSellFruits()
-    local ok, err = pcall(function()
-        local df = getDataFunction()
-        if not df then error("DataFunction not found") end
-        
-        -- Find the fish NPC target in workspace (used as sell target)
-        local fishTarget = nil
-        pcall(function()
-            -- The fish NPC is typically around index 68 in workspace children
-            -- but we search more robustly by looking for common fish NPC patterns
-            for _, child in ipairs(Workspace:GetChildren()) do
-                if child:IsA("Model") and child:FindFirstChild("HumanoidRootPart") then
-                    if string.find(string.lower(child.Name), "fish") then
-                        fishTarget = child:FindFirstChild("HumanoidRootPart")
-                        break
-                    end
-                end
-            end
-            -- Fallback: try workspace children index approach like JitlerHub
-            if not fishTarget then
-                local children = Workspace:GetChildren()
-                if children[68] and children[68]:FindFirstChild("HumanoidRootPart") then
-                    fishTarget = children[68]:FindFirstChild("HumanoidRootPart")
-                end
-            end
-        end)
-        
-        df:InvokeServer("SellingBulk", 0, "Fruit", "Fish", fishTarget)
-    end)
-    
-    if ok then
-        print("[AutoFarm] ✅ Bulk sold all Fruits!")
-        pcall(function()
-            game:GetService("StarterGui"):SetCore("SendNotification", {
-                Title = "Auto Farm"; Text = "Fruits sold!"; Duration = 2;
-            })
-        end)
-    else
-        warn("[AutoFarm] Fruit sell failed: " .. tostring(err))
-    end
-end
 
 -- ============================================================================
 -- AUTO PICKUP LOGIC
@@ -490,12 +553,41 @@ local function stopTracking()
     State.PickupCache = {}
 end
 
+-- Smoothly moves mouse from current position to target screen position over duration
+local function smoothMouseMove(targetX, targetY, duration)
+    if not mousemoveabs then return false end
+    
+    local camera = Workspace.CurrentCamera
+    if not camera then return false end
+    
+    -- Get current mouse position via InputService
+    local mousePos = game:GetService("UserInputService"):GetMouseLocation()
+    local startX, startY = mousePos.X, mousePos.Y
+    
+    local steps = math.max(math.floor(duration / 0.016), 5) -- ~60fps steps
+    for i = 1, steps do
+        local t = i / steps
+        -- Ease-out interpolation for natural feel
+        local ease = 1 - (1 - t) * (1 - t)
+        local currentX = startX + (targetX - startX) * ease
+        local currentY = startY + (targetY - startY) * ease
+        mousemoveabs(math.floor(currentX), math.floor(currentY))
+        task.wait(duration / steps)
+    end
+    
+    -- Final snap to exact position
+    mousemoveabs(math.floor(targetX), math.floor(targetY))
+    return true
+end
+
 local function doPickup()
     if State.IsDefending or State.IsHopping then return end
     local character = LocalPlayer.Character
     local root = character and character:FindFirstChild("HumanoidRootPart")
     if not root then return end
     local range = AutoFarmHandler.Settings.PickupRange
+    local camera = Workspace.CurrentCamera
+    if not camera then return end
     
     -- Snapshot keys first to avoid "invalid key to next" during yields
     local items = {}
@@ -511,14 +603,27 @@ local function doPickup()
             local itemPos = item.Position -- We know it's a BasePart
             
             if itemPos and (root.Position - itemPos).Magnitude <= range then
-                local detector = item:FindFirstChild("ItemDetector")
-                if detector and detector:IsA("ClickDetector") then
-                    if fireclickdetector then
-                        fireclickdetector(detector, (root.Position - itemPos).Magnitude)
-                        print("[AutoFarm] ✅ Picked up fruit: " .. item.Name)
+                -- Convert world position to screen position
+                local screenPos, onScreen = camera:WorldToViewportPoint(itemPos)
+                
+                if onScreen then
+                    -- Smoothly move mouse to the fruit
+                    local moved = smoothMouseMove(screenPos.X, screenPos.Y, AutoFarmHandler.Settings.MouseMoveTime)
+                    
+                    if moved then
+                        task.wait(0.05) -- Small settle time
+                        -- Click the fruit
+                        if mouse1click then
+                            mouse1click()
+                            print("[AutoFarm] ✅ Picked up fruit: " .. item.Name)
+                        end
                     end
-                    task.wait(AutoFarmHandler.Settings.PickupDelay)
+                else
+                    -- Fruit is off-screen, skip for now
+                    print("[AutoFarm] ⏭️ Fruit off-screen, skipping: " .. item.Name)
                 end
+                
+                task.wait(AutoFarmHandler.Settings.PickupDelay)
             end
         elseif not item.Parent then
              -- Cleanup if parent missing
