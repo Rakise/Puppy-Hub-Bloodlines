@@ -436,6 +436,18 @@ end
 
 local function clickEquippedTool()
     pcall(function()
+        -- Try Right Click First (Mastered Version)
+        if mouse2click then
+            mouse2click()
+        elseif VirtualInputManager then
+            VirtualInputManager:SendMouseButtonEvent(400, 400, 1, true, game, 0)
+            task.wait(0.05)
+            VirtualInputManager:SendMouseButtonEvent(400, 400, 1, false, game, 0)
+        end
+        
+        task.wait(0.1) -- Small gap to let the server register the first input if applicable
+        
+        -- Try Left Click Second (Standard Version)
         if mouse1click then
             mouse1click()
         elseif VirtualInputManager then
@@ -511,7 +523,7 @@ local function isValidFruitPickup(obj)
     end
     
     return false
-end
+
 
 local function addToCache(child)
     if isValidFruitPickup(child) then
@@ -553,31 +565,67 @@ local function stopTracking()
     State.PickupCache = {}
 end
 
--- Smoothly moves mouse from current position to target screen position over duration
-local function smoothMouseMove(targetX, targetY, duration)
-    if not mousemoveabs then return false end
+local currentMouseTask = nil
+
+-- Smoothly tracks and moves mouse to a 3D part using relative movement
+local function trackAndMoveMouseTo(part)
+    if not mousemoverel then return false end
     
-    local camera = Workspace.CurrentCamera
-    if not camera then return false end
+    local thisTask = coroutine.running()
     
-    -- Get current mouse position via InputService
-    local mousePos = game:GetService("UserInputService"):GetMouseLocation()
-    local startX, startY = mousePos.X, mousePos.Y
+    -- 1. Cancel any existing mouse task
+    if currentMouseTask and coroutine.status(currentMouseTask) == "running" then
+        task.cancel(currentMouseTask)
+    end
+    currentMouseTask = thisTask
     
-    local steps = math.max(math.floor(duration / 0.016), 5) -- ~60fps steps
-    for i = 1, steps do
-        local t = i / steps
-        -- Ease-out interpolation for natural feel
-        local ease = 1 - (1 - t) * (1 - t)
-        local currentX = startX + (targetX - startX) * ease
-        local currentY = startY + (targetY - startY) * ease
-        mousemoveabs(math.floor(currentX), math.floor(currentY))
-        task.wait(duration / steps)
+    local success = false
+    
+    pcall(function()
+        local camera = Workspace.CurrentCamera
+        local mouse = LocalPlayer:GetMouse()
+        local step = 40 -- pixels per step
+        
+        while part and part.Parent do
+            if State.IsDefending or State.IsHopping then break end
+            
+            -- Use WorldToScreenPoint to match mouse.X/Y (which account for GUI inset)
+            local screenPos, onScreen = camera:WorldToScreenPoint(part.Position)
+            if not onScreen then break end
+            
+            local targetX = screenPos.X
+            local targetY = screenPos.Y
+            
+            if math.abs(mouse.X - targetX) <= 1 and math.abs(mouse.Y - targetY) <= 1 then
+                success = true
+                break
+            end
+            
+            local dx = math.clamp(targetX - mouse.X, -step, step)
+            local dy = math.clamp(targetY - mouse.Y, -step, step)
+            
+            mousemoverel(dx, dy)
+            task.wait(0.01)
+        end
+        
+        -- Final snap for precision
+        if success and part and part.Parent and not State.IsDefending and not State.IsHopping then
+            local screenPos, onScreen = camera:WorldToScreenPoint(part.Position)
+            if onScreen then
+                local finalDX = screenPos.X - mouse.X
+                local finalDY = screenPos.Y - mouse.Y
+                if finalDX ~= 0 or finalDY ~= 0 then
+                    mousemoverel(finalDX, finalDY)
+                end
+            end
+        end
+    end)
+    
+    if currentMouseTask == thisTask then
+        currentMouseTask = nil
     end
     
-    -- Final snap to exact position
-    mousemoveabs(math.floor(targetX), math.floor(targetY))
-    return true
+    return success
 end
 
 local function doPickup()
@@ -603,12 +651,12 @@ local function doPickup()
             local itemPos = item.Position -- We know it's a BasePart
             
             if itemPos and (root.Position - itemPos).Magnitude <= range then
-                -- Convert world position to screen position
-                local screenPos, onScreen = camera:WorldToViewportPoint(itemPos)
+                -- Convert world position to screen position, matching GetMouse coords
+                local screenPos, onScreen = camera:WorldToScreenPoint(itemPos)
                 
                 if onScreen then
-                    -- Smoothly move mouse to the fruit
-                    local moved = smoothMouseMove(screenPos.X, screenPos.Y, AutoFarmHandler.Settings.MouseMoveTime)
+                    -- Smoothly track and move mouse to the 3D fruit
+                    local moved = trackAndMoveMouseTo(item)
                     
                     if moved then
                         task.wait(0.05) -- Small settle time
@@ -617,6 +665,8 @@ local function doPickup()
                             mouse1click()
                             print("[AutoFarm] ✅ Picked up fruit: " .. item.Name)
                         end
+                    else
+                        print("[AutoFarm] ⚠️ Failed/Interrupted tracking fruit: " .. item.Name)
                     end
                 else
                     -- Fruit is off-screen, skip for now
