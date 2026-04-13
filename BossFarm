@@ -157,6 +157,14 @@ local TRINKET_NAMES = {
 local TrinketSet = {}
 for _, n in ipairs(TRINKET_NAMES) do TrinketSet[n] = true end
 
+local GEM_NAMES = {
+    "Aqua Gem", "Flame Gem", "Spark Gem", "Black Flame Gem",
+    "Ground Gem", "Ice Gem", "Wind Gem", "Poison Gem",
+}
+local GemSet = {}
+for _, n in ipairs(GEM_NAMES) do GemSet[n] = true end
+local GEM_CAP = 20
+
 -- ============================================
 -- SAFE SPOTS
 -- ============================================
@@ -955,10 +963,38 @@ end
 -- ============================================
 local Loot = {}
 
-function Loot.scanLootItems(lootSpot)
+function Loot.getGemCount()
+    local count = 0
+    pcall(function()
+        local dataFunc = GetDataFunction()
+        if dataFunc then
+            local data = dataFunc:InvokeServer("Profile")
+            if data and data.Gems then
+                for _ in pairs(data.Gems) do count = count + 1 end
+            end
+        end
+    end)
+    -- Fallback: count gems in backpack if remote fails
+    if count == 0 then
+        pcall(function()
+            local backpack = LocalPlayer:FindFirstChild("Backpack")
+            if backpack then
+                for _, item in ipairs(backpack:GetChildren()) do
+                    if GemSet[item.Name] then count = count + 1 end
+                end
+            end
+        end)
+    end
+    return count
+end
+
+function Loot.scanLootItems(lootSpot, skipGems)
     local items = {}
     for _, obj in ipairs(workspace:GetDescendants()) do
         if (obj:IsA("Model") or obj:IsA("BasePart")) and TrinketSet[obj.Name] then
+            -- Skip gems if at cap
+            if skipGems and GemSet[obj.Name] then continue end
+            
             local pos = nil
             if obj:IsA("BasePart") then
                 pos = obj.Position
@@ -981,7 +1017,8 @@ function Loot.scanLootItems(lootSpot)
                     table.insert(items, {
                         obj = obj, pos = pos, id = idVal.Value,
                         name = obj.Name,
-                        dist = (lootSpot - pos).Magnitude
+                        dist = (lootSpot - pos).Magnitude,
+                        isGem = GemSet[obj.Name] or false,
                     })
                 end
             end

@@ -421,31 +421,33 @@ local function clickMouse()
     end
 end
 
-local function checkForcefieldSafety(root)
-    -- Check AutoFarmHandler safety
-    if AutoFarmHandler and AutoFarmHandler.checkSafety then
-        local safe, reason = AutoFarmHandler.checkSafety()
-        if not safe then
-            if Config.ServerHopOnDanger and AutoFarmHandler.executeServerHop then
-                print("[PuppyHub] ⚠️ Unsafe during forcefield removal: " .. tostring(reason) .. ". Hopping...")
-                root.CFrame = CFrame.new(-3933, 1120, -4571)
-                AutoFarmHandler.executeServerHop()
-                return false
+local function tweenForcefieldCFrameSync(root, targetCFrame, duration)
+    local startTime = tick()
+    local startCFrame = root.CFrame
+    while (tick() - startTime) < duration do
+        if AutoFarmHandler and AutoFarmHandler.checkSafety then
+            local safe, reason = AutoFarmHandler.checkSafety()
+            if not safe then
+                if Config.ServerHopOnDanger and AutoFarmHandler.executeServerHop then
+                    print("[PuppyHub] ⚠️ Unsafe during forcefield tween: " .. tostring(reason) .. ". Hopping...")
+                    root.CFrame = CFrame.new(-3933, 1120, -4571)
+                    AutoFarmHandler.executeServerHop()
+                    return false
+                else
+                    print("[PuppyHub] ⚠️ Unsafe: " .. tostring(reason) .. " but hopping is disabled.")
+                end
             end
         end
+        local alpha = TweenService:GetValue((tick() - startTime) / duration, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+        root.CFrame = startCFrame:Lerp(targetCFrame, alpha)
+        task.wait()
     end
-    
-    -- Check BossFarm chakra sense if available
-    if BossFarm and BossFarm.isRunning and BossFarm.isRunning() then
-        -- BossFarm's safety monitor will handle this
-        return true
-    end
-    
+    root.CFrame = targetCFrame
     return true
 end
 
 local function RemoveForcefield()
-    print("[PuppyHub] Removing Forcefield...")
+    print("[PuppyHub] Removing Forcefield Sequence Initiated...")
     
     if AutoFarmHandler and AutoFarmHandler.emergencyStop then
         AutoFarmHandler.emergencyStop()
@@ -456,21 +458,26 @@ local function RemoveForcefield()
     local char = LocalPlayer.Character
     local root = char and char:FindFirstChild("HumanoidRootPart")
     if root then
+        local forwardPos = root.CFrame * CFrame.new(0, 0, -40)
         local originalPos = root.CFrame
         
-        -- Safety check BEFORE moving
-        if not checkForcefieldSafety(root) then return end
+        local safe = tweenForcefieldCFrameSync(root, forwardPos, 0.5)
+        if not safe then return end
         
-        -- Instant snap forward (removes forcefield)
-        root.CFrame = originalPos * CFrame.new(0, 0, -40)
         task.wait(0.3)
         
-        -- Safety check AFTER moving forward
-        if not checkForcefieldSafety(root) then return end
+        if AutoFarmHandler and AutoFarmHandler.checkSafety then
+            local stillSafe, r = AutoFarmHandler.checkSafety()
+            if not stillSafe and Config.ServerHopOnDanger and AutoFarmHandler.executeServerHop then
+                root.CFrame = CFrame.new(-3933, 1120, -4571)
+                AutoFarmHandler.executeServerHop()
+                return
+            end
+        end
         
-        -- Instant snap back to original position
-        root.CFrame = originalPos
-        print("[PuppyHub] Forcefield removed.")
+        safe = tweenForcefieldCFrameSync(root, originalPos, 0.5)
+        if not safe then return end
+        print("[PuppyHub] Forcefield removed. Resume operations.")
     end
 
     StartMovementLoops()
