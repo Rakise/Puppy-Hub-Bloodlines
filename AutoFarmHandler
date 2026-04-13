@@ -38,7 +38,7 @@ local State = {
     SafetyThread = nil,
     IsDefending = false,
     IsHopping = false,
-}
+} 
 
 -- ============================================================================
 -- EXPOSED FUNCTIONS (For CoreManager)
