@@ -454,24 +454,25 @@ end
 
 local function clickEquippedTool()
     pcall(function()
-        -- Try Right Click First (Mastered Version)
-        if mouse2click then
-            mouse2click()
-        elseif VirtualInputManager then
-            VirtualInputManager:SendMouseButtonEvent(400, 400, 1, true, game, 0)
-            task.wait(0.05)
-            VirtualInputManager:SendMouseButtonEvent(400, 400, 1, false, game, 0)
-        end
+        local x, y = 400, 400 -- Screen center (tool activation doesn't need precise position)
         
-        task.wait(0.1) -- Small gap to let the server register the first input if applicable
-        
-        -- Try Left Click Second (Standard Version)
-        if mouse1click then
-            mouse1click()
-        elseif VirtualInputManager then
-            VirtualInputManager:SendMouseButtonEvent(400, 400, 0, true, game, 0)
+        if VirtualInputManager then
+            -- Right Click (Mastered Version)
+            VirtualInputManager:SendMouseButtonEvent(x, y, 1, true, game, 0)
             task.wait(0.05)
-            VirtualInputManager:SendMouseButtonEvent(400, 400, 0, false, game, 0)
+            VirtualInputManager:SendMouseButtonEvent(x, y, 1, false, game, 0)
+            
+            task.wait(0.1)
+            
+            -- Left Click (Standard Version)
+            VirtualInputManager:SendMouseButtonEvent(x, y, 0, true, game, 0)
+            task.wait(0.05)
+            VirtualInputManager:SendMouseButtonEvent(x, y, 0, false, game, 0)
+        else
+            -- Fallback: physical mouse clicks
+            if mouse2click then mouse2click() end
+            task.wait(0.1)
+            if mouse1click then mouse1click() end
         end
     end)
 end
