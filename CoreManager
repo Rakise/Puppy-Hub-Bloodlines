@@ -74,6 +74,7 @@ local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local BRAZIL_HUB_BASE_URL = "https://ghproxy.net/https://raw.githubusercontent.com/Rakise/Puppy-Hub-Bloodlines/refs/heads/main/"
 local REPO_BASE_URL = 'https://ghproxy.net/https://raw.githubusercontent.com/violin-suzutsuki/LinoriaLib/refs/heads/main/'
 local CONFIG_FILE = "PuppyHub_Bloodlines_Config.json"
+local HOP_MARKER_FILE = "PuppyHub_HopMarker.txt"
 
 -- Load Library (stagger to prevent freeze)
 print("[PuppyHub] Loading UI Library...")
@@ -636,9 +637,16 @@ if BossFarm then
     BossFarm.Settings.WebhookURL = Config.BossWebhookURL or ""
 end
 
--- Auto-login ONLY when farming features are active (= server hop from autofarm/autoboss)
--- Visual settings are saved/loaded but NOT auto-enabled on fresh join
-local isFarmRedirect = Config.AutoSummon or Config.BossFarmEnabled or Config.BossLoopEnabled
+-- Auto-login ONLY on actual server hop (marker file written by hop systems)
+-- This prevents forcefield tween + continue button on fresh manual joins
+local isActualHop = false
+if isfile and isfile(HOP_MARKER_FILE) then
+    isActualHop = true
+    pcall(function() delfile(HOP_MARKER_FILE) end)  -- Delete marker after reading
+    print("[PuppyHub] ✅ Hop marker detected — this is a server hop redirect.")
+end
+
+local isFarmRedirect = isActualHop and (Config.AutoSummon or Config.BossFarmEnabled or Config.BossLoopEnabled)
 
 -- If NOT a farm redirect, clear visual toggles so they don't auto-enable on fresh join
 if not isFarmRedirect then
@@ -654,7 +662,11 @@ if not isFarmRedirect then
     Config.CorruptedESP = false
     Config.TransTrail = false
     Config.NoFog = false
-    print("[PuppyHub] Fresh join — visual toggles reset.")
+    if not isActualHop then
+        print("[PuppyHub] Fresh join — no hop marker, skipping auto-login.")
+    else
+        print("[PuppyHub] Hop marker found but no farming active — visual toggles reset.")
+    end
 end
 
 if isFarmRedirect then

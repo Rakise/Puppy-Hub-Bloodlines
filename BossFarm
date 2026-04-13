@@ -228,6 +228,8 @@ local State = {
     bossDeathDetected = false,
     -- Looting flag (prevents farmBoss from exiting during loot)
     isLooting = false,
+    -- EVACUATION FLAG: when true, ALL positioning/combat is frozen immediately
+    evacuating = false,
 }
 
 -- ============================================
@@ -520,29 +522,38 @@ function Safety.isChakraSenseActive()
 end
 
 function Safety.evacuateAndHop(reason)
+    -- IMMEDIATELY freeze all positioning
+    State.evacuating = true
+    State.running = false
+    
+    -- STOP anchor + combat BEFORE teleporting (prevents Heartbeat from snapping us back)
+    if State.anchorConn then State.anchorConn:Disconnect(); State.anchorConn = nil end
+    if State.attackThread then pcall(task.cancel, State.attackThread); State.attackThread = nil end
+    Charging.stop()
+    
     Utils.log("Evacuating: " .. tostring(reason))
     Utils.notify("Evacuating: " .. tostring(reason), 5)
     Webhook.send("⚠️ Evacuating & Hopping", reason, 15158332)
     
-    -- Only teleport if we're far from the secret spot (avoids suspicious snap if already walking there)
+    -- NOW teleport to safe spot (anchor is already dead, can't fight back)
     local pd = Utils.getPlayerData()
     if pd then
-        local distToSpot = (pd.rootPart.Position - SECRET_SPOT).Magnitude
-        if distToSpot > 20 then
-            pd.rootPart.CFrame = CFrame.new(SECRET_SPOT)
-        end
+        pd.rootPart.CFrame = CFrame.new(SECRET_SPOT)
     end
     
+    -- Full cleanup
     Farm.stopCurrent()
     if State.farmThread then pcall(task.cancel, State.farmThread); State.farmThread = nil end
     if State.bossLoopThread then pcall(task.cancel, State.bossLoopThread); State.bossLoopThread = nil end
     if State.dangerMonitorThread then pcall(task.cancel, State.dangerMonitorThread); State.dangerMonitorThread = nil end
+    Utils.disconnectAll()
+    Utils.cancelAllThreads()
     BossFarm.Settings.Enabled = false
     BossFarm.Settings.BossLoopEnabled = false
-    State.running = false
     
+    -- Random walk while waiting for hop
     task.spawn(function()
-        while true do
+        while State.evacuating do
             Utils.randomWalkAt(SECRET_SPOT, 6)
             task.wait(math.random(15, 30) / 10)
         end
@@ -570,39 +581,57 @@ function Safety.startMonitor()
 end
 
 function Safety.evacuateAndHide(reason)
+    -- IMMEDIATELY freeze all positioning
+    State.evacuating = true
+    State.running = false
+    
+    -- STOP anchor + combat BEFORE teleporting (prevents Heartbeat from snapping us back)
+    if State.anchorConn then State.anchorConn:Disconnect(); State.anchorConn = nil end
+    if State.attackThread then pcall(task.cancel, State.attackThread); State.attackThread = nil end
+    Charging.stop()
+    
     Utils.log("Hiding: " .. tostring(reason))
-    Utils.notify("Hiding at Safe Spot! Waiting for Chakra Sense to end...", 5)
+    Utils.notify("Hiding at Safe Spot! Waiting for danger to clear...", 5)
     
     -- Remember if we were in boss loop mode and what index we were at
     local wasInBossLoop = BossFarm.Settings.BossLoopEnabled
     local resumeIndex = State.bossLoopIndex
     
-    -- Only teleport if we're far from the secret spot (avoids suspicious snap if already walking there)
+    -- NOW teleport to safe spot (anchor is already dead, can't fight back)
     local pd = Utils.getPlayerData()
     if pd then
-        local distToSpot = (pd.rootPart.Position - SECRET_SPOT).Magnitude
-        if distToSpot > 20 then
-            pd.rootPart.CFrame = CFrame.new(SECRET_SPOT)
-        end
+        pd.rootPart.CFrame = CFrame.new(SECRET_SPOT)
     end
     
+    -- Full cleanup
     Farm.stopCurrent()
+    Utils.disconnectAll()
+    Utils.cancelAllThreads()
     if State.bossLoopThread then pcall(task.cancel, State.bossLoopThread); State.bossLoopThread = nil end
     if State.dangerMonitorThread then pcall(task.cancel, State.dangerMonitorThread); State.dangerMonitorThread = nil end
     
     task.spawn(function()
         local safeTimer = 0
         local dangerTimer = 0
-        -- Check both Enabled (single) and BossLoopEnabled (advanced) — either means we should wait
         while BossFarm.Settings.Enabled or wasInBossLoop do
+            -- HOLD safe spot every tick (absolute enforcement)
+            local cpd = Utils.getPlayerData()
+            if cpd then
+                local dist = (cpd.rootPart.Position - SECRET_SPOT).Magnitude
+                if dist > 30 then
+                    cpd.rootPart.CFrame = CFrame.new(SECRET_SPOT)
+                end
+            end
             Utils.randomWalkAt(SECRET_SPOT, 6)
             
             local senseActive, sensePlayer = Safety.isChakraSenseActive()
-            if senseActive then
+            local contested = Safety.isPlayerNearPosition(SECRET_SPOT, BossFarm.Settings.PlayerDetectionRadius)
+            
+            if senseActive or contested then
                 safeTimer = 0
                 dangerTimer = dangerTimer + 2
                 if dangerTimer >= 15 then
-                    Safety.evacuateAndHop("Chakra Sense > 15s (" .. (sensePlayer or "Unknown") .. ")")
+                    Safety.evacuateAndHop("Danger > 15s (" .. (sensePlayer or "Someone nearby") .. ")")
                     return
                 end
             else
@@ -615,13 +644,17 @@ function Safety.evacuateAndHide(reason)
             task.wait(2)
         end
         
+        -- Clear evacuation flag BEFORE resuming
+        State.evacuating = false
+        
         Utils.notify("Coast is clear! Resuming Farm...", 5)
         if wasInBossLoop then
-            -- Restore boss loop state and resume from where we left off
             BossFarm.Settings.BossLoopEnabled = true
             State.bossLoopIndex = resumeIndex
+            State.running = true
             BossFarm.startLoop()
         elseif BossFarm.Settings.Enabled then
+            State.running = true
             Farm.start()
         end
     end)
@@ -1191,7 +1224,7 @@ local Combat = {}
 function Combat.startAttacking(model)
     State.attackThread = task.spawn(function()
         local dataEvent = GetDataEvent()
-        while State.running and State.currentBoss do
+        while State.running and State.currentBoss and not State.evacuating do
             if State.hyugaInVoid or State.hakuSafeSpot then
                 task.wait(0.2)
                 continue
@@ -1216,7 +1249,7 @@ end
 
 function Combat.enableNoclip()
     Utils.addConnection(RunService.Stepped:Connect(function()
-        if not State.running then return end
+        if not State.running or State.evacuating then return end
         local pData = Utils.getPlayerData()
         if not pData then return end
         for _, part in pairs(pData.character:GetDescendants()) do
@@ -1233,6 +1266,8 @@ local Positioning = {}
 function Positioning.startAnchoring(model, config)
     State.anchorConn = RunService.Heartbeat:Connect(function()
         pcall(function()
+            -- ABSOLUTE SAFETY: if evacuating, do NOTHING
+            if State.evacuating then return end
             if not State.running then return end
             
             -- If we're currently looting, don't reposition
@@ -1288,6 +1323,8 @@ function ServerHop.join(serverId)
     local dataEvent = GetDataEvent()
     if dataEvent then
         Utils.log("Firing ServerTeleport to: " .. tostring(serverId))
+        -- Write hop marker so CoreManager knows this is a redirect on next join
+        pcall(function() writefile("PuppyHub_HopMarker.txt", tostring(tick())) end)
         dataEvent:FireServer("ServerTeleport", serverId, 14)
     else
         Utils.log("Error: DataEvent not found!", "warn")
@@ -1425,7 +1462,7 @@ function Farm.farmBoss(hum, model, bossName)
     -- Health + safety monitor loop
     local lastPlayerCheck = tick()
     local lastChakraCheck = tick()
-    while State.running and State.currentBoss == bossName do
+    while State.running and not State.evacuating and State.currentBoss == bossName do
         local cPData = Utils.getPlayerData()
         if not cPData then break end
         
@@ -1575,6 +1612,7 @@ function Farm.start()
     if State.running then return end
     State.farmThread = task.spawn(function()
         State.running = true
+        State.evacuating = false
         Utils.notify("Boss auto-farm started!", 3)
         
         Safety.startMonitor()
@@ -1655,6 +1693,7 @@ function BossLoop.start()
     if State.bossLoopThread then pcall(task.cancel, State.bossLoopThread) end
     BossFarm.Settings.BossLoopEnabled = true
     State.running = true
+    State.evacuating = false
     
     State.bossLoopThread = task.spawn(function()
         Utils.notify("Advanced Boss Loop started!", 3)

@@ -169,6 +169,8 @@ function ServerHop.join(serverId)
     local dataEvent = events and events:FindFirstChild("DataEvent")
     if dataEvent then
         print("[AutoFarm] Firing ServerTeleport to: " .. tostring(serverId))
+        -- Write hop marker so CoreManager knows this is a redirect on next join
+        pcall(function() writefile("PuppyHub_HopMarker.txt", tostring(tick())) end)
         -- Standard Bloodlines teleport implementation
         dataEvent:FireServer("ServerTeleport", serverId, 14)
     else
