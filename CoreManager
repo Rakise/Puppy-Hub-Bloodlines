@@ -336,6 +336,7 @@ local function tweenForcefieldCFrameSync(root, targetCFrame, duration)
             if not safe then
                 if Config.ServerHopOnDanger and AutoFarmHandler.executeServerHop then
                     print("[PuppyHub] ⚠️ Unsafe during forcefield tween: " .. tostring(reason) .. ". Hopping...")
+                    root.CFrame = CFrame.new(-3933, 1120, -4571)
                     AutoFarmHandler.executeServerHop()
                     return false
                 else
@@ -374,6 +375,7 @@ local function RemoveForcefield()
         if AutoFarmHandler and AutoFarmHandler.checkSafety then
             local stillSafe, r = AutoFarmHandler.checkSafety()
             if not stillSafe and Config.ServerHopOnDanger and AutoFarmHandler.executeServerHop then
+                root.CFrame = CFrame.new(-3933, 1120, -4571)
                 AutoFarmHandler.executeServerHop()
                 return
             end

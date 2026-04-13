@@ -483,14 +483,62 @@ function Safety.startMonitor()
     if State.dangerMonitorThread then pcall(task.cancel, State.dangerMonitorThread) end
     State.dangerMonitorThread = task.spawn(function()
         while State.running do
-            if BossFarm.Settings.ServerHopIfChakraSense then
-                local senseActive, sensePlayer = Safety.isChakraSenseActive()
-                if senseActive then
+            local senseActive, sensePlayer = Safety.isChakraSenseActive()
+            if senseActive then
+                if BossFarm.Settings.ServerHopIfChakraSense then
                     Safety.evacuateAndHop("Chakra Sense (" .. sensePlayer .. ")")
-                    return
+                else
+                    Safety.evacuateAndHide("Chakra Sense (" .. sensePlayer .. ")")
                 end
+                return
             end
             task.wait()
+        end
+    end)
+end
+
+function Safety.evacuateAndHide(reason)
+    Utils.log("Hiding: " .. tostring(reason))
+    Utils.notify("Hiding at Safe Spot! Waiting for Chakra Sense to end...", 5)
+    
+    local pd = Utils.getPlayerData()
+    if pd then pd.rootPart.CFrame = CFrame.new(SECRET_SPOT) end
+    
+    Farm.stopCurrent()
+    if State.bossLoopThread then pcall(task.cancel, State.bossLoopThread); State.bossLoopThread = nil end
+    if State.dangerMonitorThread then pcall(task.cancel, State.dangerMonitorThread); State.dangerMonitorThread = nil end
+    
+    task.spawn(function()
+        local safeTimer = 0
+        while BossFarm.Settings.Enabled do
+            local pData = Utils.getPlayerData()
+            if pData then
+                local angle = math.random() * math.pi * 2
+                local distance = math.random() * 6
+                local offset = Vector3.new(math.cos(angle) * distance, 0, math.sin(angle) * distance)
+                local targetPos = SECRET_SPOT + offset
+                pcall(function() pData.humanoid:MoveTo(targetPos) end)
+            end
+            
+            local senseActive = Safety.isChakraSenseActive()
+            if senseActive then
+                safeTimer = 0
+            else
+                safeTimer = safeTimer + 1
+                if safeTimer >= 10 then
+                    break
+                end
+            end
+            task.wait(2)
+        end
+        
+        if BossFarm.Settings.Enabled then
+            Utils.notify("Coast is clear! Resuming Farm...", 5)
+            if BossFarm.Settings.BossLoopEnabled then
+                Farm.startLoop()
+            else
+                Farm.startSingle()
+            end
         end
     end)
 end
@@ -546,7 +594,11 @@ function Detection.triggerSpawnIfNeeded(bossName, config)
     if targetPos then
         local contested, nearPlayer = Safety.isPlayerNearPosition(targetPos, BossFarm.Settings.PlayerDetectionRadius)
         if contested then
-            Safety.evacuateAndHop("Players at " .. bossName .. " spawn! (" .. tostring(nearPlayer) .. ")")
+            if BossFarm.Settings.ServerHopIfChakraSense then
+                Safety.evacuateAndHop("Players at " .. bossName .. " spawn! (" .. tostring(nearPlayer) .. ")")
+            else
+                Safety.evacuateAndHide("Players at " .. bossName .. " spawn! (" .. tostring(nearPlayer) .. ")")
+            end
             return false
         end
         
@@ -858,16 +910,22 @@ function Loot.collectNearBoss(bossName, config)
         if pData then pData.rootPart.CFrame = CFrame.new(lootSpot) end
         
         -- Active Safety Checks
-        if BossFarm.Settings.ServerHopIfChakraSense then
-            local senseActive, sensePlayer = Safety.isChakraSenseActive()
-            if senseActive then
+        local senseActive, sensePlayer = Safety.isChakraSenseActive()
+        if senseActive then
+            if BossFarm.Settings.ServerHopIfChakraSense then
                 Safety.evacuateAndHop("Chakra Sense (" .. sensePlayer .. ") while waiting for loot!")
-                return
+            else
+                Safety.evacuateAndHide("Chakra Sense (" .. sensePlayer .. ") while waiting for loot!")
             end
+            return
         end
         local contested, nearPlayer = Safety.isPlayerNearPosition(lootSpot, BossFarm.Settings.PlayerDetectionRadius)
         if contested then
-            Safety.evacuateAndHop("Players nearby! (" .. tostring(nearPlayer) .. ") while waiting for loot!")
+            if BossFarm.Settings.ServerHopIfChakraSense then
+                Safety.evacuateAndHop("Players nearby! (" .. tostring(nearPlayer) .. ") while waiting for loot!")
+            else
+                Safety.evacuateAndHide("Players nearby! (" .. tostring(nearPlayer) .. ") while waiting for loot!")
+            end
             return
         end
         
@@ -929,16 +987,22 @@ function Loot.collectNearBoss(bossName, config)
             if not entry.obj.Parent then break end -- Item is gone, picked up successfully!
             
             -- Active Safety Checks
-            if BossFarm.Settings.ServerHopIfChakraSense then
-                local senseActive, sensePlayer = Safety.isChakraSenseActive()
-                if senseActive then
+            local senseActive, sensePlayer = Safety.isChakraSenseActive()
+            if senseActive then
+                if BossFarm.Settings.ServerHopIfChakraSense then
                     Safety.evacuateAndHop("Chakra Sense (" .. sensePlayer .. ") while looting!")
-                    return
+                else
+                    Safety.evacuateAndHide("Chakra Sense (" .. sensePlayer .. ") while looting!")
                 end
+                return
             end
             local contested, nearPlayer = Safety.isPlayerNearPosition(entry.pos, BossFarm.Settings.PlayerDetectionRadius)
             if contested then
-                Safety.evacuateAndHop("Players nearby! (" .. tostring(nearPlayer) .. ") while looting!")
+                if BossFarm.Settings.ServerHopIfChakraSense then
+                    Safety.evacuateAndHop("Players nearby! (" .. tostring(nearPlayer) .. ") while looting!")
+                else
+                    Safety.evacuateAndHide("Players nearby! (" .. tostring(nearPlayer) .. ") while looting!")
+                end
                 return
             end
             
@@ -1188,7 +1252,11 @@ function Farm.farmBoss(hum, model, bossName)
             lastPlayerCheck = tick()
             local contested, nearPlayer = Safety.isBossContested(model, BossFarm.Settings.PlayerDetectionRadius)
             if contested then
-                Safety.evacuateAndHop("Players nearby! (" .. tostring(nearPlayer) .. ")")
+                if BossFarm.Settings.ServerHopIfChakraSense then
+                    Safety.evacuateAndHop("Players nearby! (" .. tostring(nearPlayer) .. ")")
+                else
+                    Safety.evacuateAndHide("Players nearby! (" .. tostring(nearPlayer) .. ")")
+                end
                 return
             end
         end
