@@ -158,7 +158,7 @@ for _, n in ipairs(TRINKET_NAMES) do TrinketSet[n] = true end
 -- ============================================
 -- SAFE SPOTS
 -- ============================================
-local SECRET_SPOT = Vector3.new(-4458.5, 660.7, -4895.2)
+local SECRET_SPOT = Vector3.new(-3933, 1120, -4571)
 local HYUGA_VOID_SAFE_SPOT = Vector3.new(-700.8, -334.3, -780.8)
 local HAKU_SAFE_SPOT = Vector3.new(-2969.2, 1832.9, -9610.4)
 
@@ -201,6 +201,7 @@ local State = {
     attackThread = nil,
     -- Boss Loop
     bossLoopThread = nil,
+    dangerMonitorThread = nil,
 }
 
 -- ============================================
@@ -440,6 +441,58 @@ function Safety.isChakraSenseActive()
         end
     end
     return false
+end
+
+function Safety.evacuateAndHop(reason)
+    Utils.log("Evacuating: " .. tostring(reason))
+    Utils.notify("Evacuating: " .. tostring(reason), 5)
+    
+    local pd = Utils.getPlayerData()
+    if pd then
+        pd.rootPart.CFrame = CFrame.new(SECRET_SPOT)
+    end
+    
+    Farm.stopCurrent()
+    if State.farmThread then pcall(task.cancel, State.farmThread); State.farmThread = nil end
+    if State.bossLoopThread then pcall(task.cancel, State.bossLoopThread); State.bossLoopThread = nil end
+    if State.dangerMonitorThread then pcall(task.cancel, State.dangerMonitorThread); State.dangerMonitorThread = nil end
+    BossFarm.Settings.Enabled = false
+    BossFarm.Settings.BossLoopEnabled = false
+    State.running = false
+    
+    task.spawn(function()
+        while true do
+            local pData = Utils.getPlayerData()
+            if pData then
+                local angle = math.random() * math.pi * 2
+                local distance = math.random() * 6
+                local offset = Vector3.new(math.cos(angle) * distance, 0, math.sin(angle) * distance)
+                local targetPos = SECRET_SPOT + offset
+                pcall(function()
+                    pData.humanoid:MoveTo(targetPos)
+                end)
+            end
+            task.wait(math.random(15, 30) / 10)
+        end
+    end)
+    
+    ServerHop.execute(true)
+end
+
+function Safety.startMonitor()
+    if State.dangerMonitorThread then pcall(task.cancel, State.dangerMonitorThread) end
+    State.dangerMonitorThread = task.spawn(function()
+        while State.running do
+            if BossFarm.Settings.ServerHopIfChakraSense then
+                local senseActive, sensePlayer = Safety.isChakraSenseActive()
+                if senseActive then
+                    Safety.evacuateAndHop("Chakra Sense (" .. sensePlayer .. ")")
+                    return
+                end
+            end
+            task.wait()
+        end
+    end)
 end
 
 -- ============================================
@@ -983,28 +1036,39 @@ function ServerHop.fetchServers()
     return allServers
 end
 
-function ServerHop.execute()
+function ServerHop.execute(keepTrying)
     Utils.log("Initiating HTTP server hop...")
     task.spawn(function()
-        local servers = ServerHop.fetchServers()
-        if #servers > 0 then
-            local candidates = {}
-            for _, s in ipairs(servers) do
-                if s.playing and s.maxPlayers and s.id ~= game.JobId then
-                    if s.playing >= 5 and s.playing < (s.maxPlayers - 2) then
-                        table.insert(candidates, s)
+        local function doHop()
+            local servers = ServerHop.fetchServers()
+            if #servers > 0 then
+                local candidates = {}
+                for _, s in ipairs(servers) do
+                    if s.playing and s.maxPlayers and s.id ~= game.JobId then
+                        if s.playing >= 5 and s.playing < (s.maxPlayers - 2) then
+                            table.insert(candidates, s)
+                        end
                     end
                 end
+                
+                if #candidates > 0 then
+                    local target = candidates[math.random(1, #candidates)]
+                    Utils.log("Joining server: " .. target.id)
+                    Utils.notify("Joining server...", 3)
+                    ServerHop.join(target.id)
+                else
+                    Utils.log("No suitable servers found.")
+                end
             end
-            
-            if #candidates > 0 then
-                local target = candidates[math.random(1, #candidates)]
-                Utils.log("Joining server: " .. target.id)
-                Utils.notify("Joining server...", 3)
-                ServerHop.join(target.id)
-            else
-                Utils.log("No suitable servers found.")
+        end
+        
+        if keepTrying then
+            while true do
+                doHop()
+                task.wait(6)
             end
+        else
+            doHop()
         end
     end)
 end
@@ -1073,27 +1137,10 @@ function Farm.farmBoss(hum, model, bossName)
         -- Periodic player proximity check
         if tick() - lastPlayerCheck >= 2 then
             lastPlayerCheck = tick()
-            local contested = Safety.isBossContested(model, BossFarm.Settings.PlayerDetectionRadius)
+            local contested, nearPlayer = Safety.isBossContested(model, BossFarm.Settings.PlayerDetectionRadius)
             if contested then
-                Utils.notify("Players nearby! Hiding...", 3)
-                Farm.stopCurrent()
-                local pd = Utils.getPlayerData()
-                if pd then pd.rootPart.CFrame = CFrame.new(SECRET_SPOT) end
-                task.wait(2)
-                break
-            end
-        end
-        
-        -- Chakra Sense detection → auto server hop
-        if BossFarm.Settings.ServerHopIfChakraSense and tick() - lastChakraCheck >= 1 then
-            lastChakraCheck = tick()
-            local senseActive, sensePlayer = Safety.isChakraSenseActive()
-            if senseActive then
-                Utils.notify("⚠️ Chakra Sense detected (" .. sensePlayer .. ")! Hopping...", 4)
-                Farm.stop()
-                task.wait(1)
-                ServerHop.execute()
-                return -- Exit farmBoss entirely
+                Safety.evacuateAndHop("Players nearby! (" .. tostring(nearPlayer) .. ")")
+                return
             end
         end
         
@@ -1107,6 +1154,7 @@ function Farm.stopCurrent()
     if State.anchorConn then State.anchorConn:Disconnect(); State.anchorConn = nil end
     if State.attackThread then pcall(task.cancel, State.attackThread); State.attackThread = nil end
     if State.knockedThread then pcall(task.cancel, State.knockedThread); State.knockedThread = nil end
+    if State.dangerMonitorThread then pcall(task.cancel, State.dangerMonitorThread); State.dangerMonitorThread = nil end
     
     -- Reset per-boss state
     State.bossHeightBoost = 0
@@ -1131,6 +1179,8 @@ function Farm.start()
     State.farmThread = task.spawn(function()
         State.running = true
         Utils.notify("Boss auto-farm started!", 3)
+        
+        Safety.startMonitor()
         
         while BossFarm.Settings.Enabled and State.running do
             Farm.stopCurrent()
@@ -1167,11 +1217,10 @@ function Farm.start()
             end
             
             -- Check if boss is contested
-            local contested = Safety.isBossContested(model, BossFarm.Settings.PlayerDetectionRadius)
+            local contested, nearPlayer = Safety.isBossContested(model, BossFarm.Settings.PlayerDetectionRadius)
             if contested then
-                Utils.notify("Players nearby, waiting...", 3)
-                task.wait(5)
-                continue
+                Safety.evacuateAndHop("Players nearby! (" .. tostring(nearPlayer) .. ")")
+                return
             end
             
             Farm.farmBoss(hum, model, bossName)
@@ -1212,6 +1261,8 @@ function BossLoop.start()
     State.bossLoopThread = task.spawn(function()
         Utils.notify("Advanced Boss Loop started!", 3)
         
+        Safety.startMonitor()
+        
         while BossFarm.Settings.BossLoopEnabled and State.running do
             local loopList = BossLoop.getSelectedList()
             
@@ -1224,18 +1275,6 @@ function BossLoop.start()
             -- Iterate through each selected boss
             for _, bossName in ipairs(loopList) do
                 if not BossFarm.Settings.BossLoopEnabled or not State.running then break end
-                
-                -- Chakra Sense check before each boss
-                if BossFarm.Settings.ServerHopIfChakraSense then
-                    local senseActive, sensePlayer = Safety.isChakraSenseActive()
-                    if senseActive then
-                        Utils.notify("⚠️ Chakra Sense (" .. sensePlayer .. ")! Hopping...", 4)
-                        BossLoop.stop()
-                        task.wait(1)
-                        ServerHop.execute()
-                        return
-                    end
-                end
                 
                 local config = BOSS_CONFIGS[bossName]
                 if not config then continue end
@@ -1254,10 +1293,10 @@ function BossLoop.start()
                 end
                 
                 -- Check if contested
-                local contested = Safety.isBossContested(model, BossFarm.Settings.PlayerDetectionRadius)
+                local contested, nearPlayer = Safety.isBossContested(model, BossFarm.Settings.PlayerDetectionRadius)
                 if contested then
-                    Utils.notify("Players near " .. bossName .. ", skipping...", 3)
-                    continue
+                    Safety.evacuateAndHop("Players near " .. bossName .. " (" .. tostring(nearPlayer) .. ")")
+                    return
                 end
                 
                 -- Farm this boss
@@ -1268,8 +1307,7 @@ function BossLoop.start()
             
             -- Full loop complete
             if BossFarm.Settings.BossLoopEnabled and BossFarm.Settings.HopAfterLoop then
-                Utils.notify("Boss loop complete. Hopping...", 3)
-                ServerHop.execute()
+                Safety.evacuateAndHop("Loop complete")
                 return
             end
             
