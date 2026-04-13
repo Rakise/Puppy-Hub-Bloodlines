@@ -506,9 +506,13 @@ function Safety.evacuateAndHop(reason)
     Utils.notify("Evacuating: " .. tostring(reason), 5)
     Webhook.send("⚠️ Evacuating & Hopping", reason, 15158332)
     
+    -- Only teleport if we're far from the secret spot (avoids suspicious snap if already walking there)
     local pd = Utils.getPlayerData()
     if pd then
-        pd.rootPart.CFrame = CFrame.new(SECRET_SPOT)
+        local distToSpot = (pd.rootPart.Position - SECRET_SPOT).Magnitude
+        if distToSpot > 20 then
+            pd.rootPart.CFrame = CFrame.new(SECRET_SPOT)
+        end
     end
     
     Farm.stopCurrent()
@@ -555,8 +559,14 @@ function Safety.evacuateAndHide(reason)
     local wasInBossLoop = BossFarm.Settings.BossLoopEnabled
     local resumeIndex = State.bossLoopIndex
     
+    -- Only teleport if we're far from the secret spot (avoids suspicious snap if already walking there)
     local pd = Utils.getPlayerData()
-    if pd then pd.rootPart.CFrame = CFrame.new(SECRET_SPOT) end
+    if pd then
+        local distToSpot = (pd.rootPart.Position - SECRET_SPOT).Magnitude
+        if distToSpot > 20 then
+            pd.rootPart.CFrame = CFrame.new(SECRET_SPOT)
+        end
+    end
     
     Farm.stopCurrent()
     if State.bossLoopThread then pcall(task.cancel, State.bossLoopThread); State.bossLoopThread = nil end
