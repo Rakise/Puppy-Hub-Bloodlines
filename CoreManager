@@ -438,11 +438,27 @@ local function AutoLoginRoutine()
         local menuFrame = menuScreen:WaitForChild("Menu", 5)
         if menuFrame then
             local continueBtn = menuFrame:FindFirstChild("Continue")
-            if continueBtn and continueBtn:IsA("GuiButton") then
+            if continueBtn then
                 task.wait(1)
                 
                 local clicked = false
-                
+                continueBtn:Activate()
+                task.wait(0.1)
+                firesignal(continueBtn.HoverEnter)
+                task.wait(0.1)
+                firesignal(continueBtn.MouseButton1Down)
+                task.wait(0.1)
+                firesignal(continueBtn.MouseButton1Up)
+                task.wait(0.1)
+                firesignal(continueBtn.MouseButton1Click)
+                task.wait(0.1)
+                firesignal(continueBtn.Activated)
+                task.wait(0.1)
+                firesignal(continueBtn.InputBegan, {UserInputType = Enum.UserInputType.MouseButton1, UserInputState = Enum.UserInputState.Begin})
+                task.wait(0.1)
+                firesignal(continueBtn.HoverLeave)
+                task.wait(0.1)
+                continueBtn:Activate()
                 -- Method 1: Built-in Activate() (simplest, no external tools)
                 if not clicked then
                     local ok = pcall(function()
