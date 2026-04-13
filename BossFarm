@@ -844,47 +844,74 @@ function Loot.collectNearBoss(bossName, config)
     local pData = Utils.getPlayerData()
     if not pData then return end
     
-    Utils.log("Collecting loot for " .. bossName)
-    pData.rootPart.CFrame = CFrame.new(lootSpot)
-    task.wait(5)
+    Utils.log("Waiting for loot to spawn for " .. bossName)
+    Utils.notify("Waiting 12s for Boss Loot...", 3)
     
-    -- Re-get player data after wait
-    pData = Utils.getPlayerData()
-    if not pData then return end
-    pData.rootPart.CFrame = CFrame.new(lootSpot)
-    
+    local items = {}
     local dataEvent = GetDataEvent()
     if not dataEvent then return end
     
-    local items = {}
-    for _, obj in ipairs(workspace:GetDescendants()) do
-        if (obj:IsA("Model") or obj:IsA("BasePart")) and TrinketSet[obj.Name] then
-            local pos = nil
-            if obj:IsA("BasePart") then
-                pos = obj.Position
-            elseif obj:IsA("Model") then
-                local pp = obj.PrimaryPart or obj:FindFirstChildWhichIsA("BasePart")
-                if pp then pos = pp.Position end
+    -- Wait up to 12 seconds for at least one item to appear
+    local startWait = tick()
+    while tick() - startWait < 12 do
+        pData = Utils.getPlayerData()
+        if pData then pData.rootPart.CFrame = CFrame.new(lootSpot) end
+        
+        -- Active Safety Checks
+        if BossFarm.Settings.ServerHopIfChakraSense then
+            local senseActive, sensePlayer = Safety.isChakraSenseActive()
+            if senseActive then
+                Safety.evacuateAndHop("Chakra Sense (" .. sensePlayer .. ") while waiting for loot!")
+                return
             end
-            
-            if pos and (lootSpot - pos).Magnitude <= 200 then
-                local idVal = obj:FindFirstChild("ID")
-                if not idVal then
-                    for _, d in ipairs(obj:GetDescendants()) do
-                        if d.Name == "ID" and d:IsA("NumberValue") then
-                            idVal = d
-                            break
+        end
+        local contested, nearPlayer = Safety.isPlayerNearPosition(lootSpot, BossFarm.Settings.PlayerDetectionRadius)
+        if contested then
+            Safety.evacuateAndHop("Players nearby! (" .. tostring(nearPlayer) .. ") while waiting for loot!")
+            return
+        end
+        
+        items = {}
+        for _, obj in ipairs(workspace:GetDescendants()) do
+            if (obj:IsA("Model") or obj:IsA("BasePart")) and TrinketSet[obj.Name] then
+                local pos = nil
+                if obj:IsA("BasePart") then
+                    pos = obj.Position
+                elseif obj:IsA("Model") then
+                    local pp = obj.PrimaryPart or obj:FindFirstChildWhichIsA("BasePart")
+                    if pp then pos = pp.Position end
+                end
+                
+                if pos and (lootSpot - pos).Magnitude <= 200 then
+                    local idVal = obj:FindFirstChild("ID")
+                    if not idVal then
+                        for _, d in ipairs(obj:GetDescendants()) do
+                            if d.Name == "ID" and d:IsA("NumberValue") then
+                                idVal = d
+                                break
+                            end
                         end
                     end
-                end
-                if idVal then
-                    table.insert(items, {
-                        obj = obj, pos = pos, id = idVal.Value,
-                        dist = (lootSpot - pos).Magnitude
-                    })
+                    if idVal then
+                        table.insert(items, {
+                            obj = obj, pos = pos, id = idVal.Value,
+                            dist = (lootSpot - pos).Magnitude
+                        })
+                    end
                 end
             end
         end
+        
+        -- If items spawned, and we've waited at least 5s total (so multiple drops can spawn)
+        if #items > 0 and (tick() - startWait > 5) then
+            break 
+        end
+        task.wait(1)
+    end
+    
+    if #items == 0 then
+        Utils.notify("No boss loot found after 12s.", 2)
+        return
     end
     
     table.sort(items, function(a, b) return a.dist < b.dist end)
@@ -895,14 +922,28 @@ function Loot.collectNearBoss(bossName, config)
         if not pData then break end
         
         pData.rootPart.CFrame = CFrame.new(entry.pos + Vector3.new(0, 3, 0))
-        task.wait(0.3)
+        task.wait(0.3) -- settle
         
-        -- Spam pickup
-        local spamEnd = tick() + 1.5
+        local spamEnd = tick() + 0.5 -- Increased timeout to bypass game's pickup debounce
         while tick() < spamEnd do
-            if not entry.obj.Parent then break end
+            if not entry.obj.Parent then break end -- Item is gone, picked up successfully!
+            
+            -- Active Safety Checks
+            if BossFarm.Settings.ServerHopIfChakraSense then
+                local senseActive, sensePlayer = Safety.isChakraSenseActive()
+                if senseActive then
+                    Safety.evacuateAndHop("Chakra Sense (" .. sensePlayer .. ") while looting!")
+                    return
+                end
+            end
+            local contested, nearPlayer = Safety.isPlayerNearPosition(entry.pos, BossFarm.Settings.PlayerDetectionRadius)
+            if contested then
+                Safety.evacuateAndHop("Players nearby! (" .. tostring(nearPlayer) .. ") while looting!")
+                return
+            end
+            
             pcall(function() dataEvent:FireServer("PickUp", entry.id) end)
-            task.wait(0.05)
+            task.wait(0.1)
         end
         task.wait(0.2)
     end
@@ -964,16 +1005,7 @@ function Positioning.startAnchoring(model, config)
             
             local hum = model:FindFirstChildOfClass("Humanoid")
             if not hum or not hum.Parent or hum.Health <= 0 then
-                -- Boss died
-                local deadName = State.currentBoss
-                local deadConfig = config
                 Farm.stopCurrent()
-                
-                if BossFarm.Settings.AutoLootOnKill and deadConfig.lootSpot then
-                    task.spawn(function()
-                        pcall(Loot.collectNearBoss, deadName, deadConfig)
-                    end)
-                end
                 return
             end
             
@@ -1133,7 +1165,13 @@ function Farm.farmBoss(hum, model, bossName)
         if not cPData then break end
         
         -- Check if boss is still valid
-        if not hum or not hum.Parent or hum.Health <= 0 then break end
+        if not hum or not hum.Parent or hum.Health <= 0 then
+            Farm.stopCurrent()
+            if BossFarm.Settings.AutoLootOnKill and config.lootSpot then
+                pcall(Loot.collectNearBoss, bossName, config)
+            end
+            break
+        end
         
         -- Health threshold check
         if cPData.humanoid.Health < State.healthThreshold then
