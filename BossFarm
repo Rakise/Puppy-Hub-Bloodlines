@@ -1014,7 +1014,7 @@ end
 -- ============================================
 -- HTTP SERVER HOP SYSTEM
 -- ============================================
-local ServerHop = {}
+ServerHop = {}
 
 function ServerHop.join(serverId)
     local dataEvent = GetDataEvent()
