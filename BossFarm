@@ -283,6 +283,22 @@ function Utils.addThread(thread)
     return thread
 end
 
+-- Simulate natural player movement near a position (anti-detection)
+-- Walks randomly within a radius, varying speed and direction like a real player
+function Utils.randomWalkAt(spot, radius)
+    radius = radius or 6
+    local pData = Utils.getPlayerData()
+    if not pData then return end
+    
+    local angle = math.random() * math.pi * 2
+    local distance = math.random() * radius
+    local offset = Vector3.new(math.cos(angle) * distance, 0, math.sin(angle) * distance)
+    local targetPos = spot + offset
+    pcall(function()
+        pData.humanoid:MoveTo(targetPos)
+    end)
+end
+
 -- ============================================
 -- CHARGING SYSTEM
 -- ============================================
@@ -505,16 +521,7 @@ function Safety.evacuateAndHop(reason)
     
     task.spawn(function()
         while true do
-            local pData = Utils.getPlayerData()
-            if pData then
-                local angle = math.random() * math.pi * 2
-                local distance = math.random() * 6
-                local offset = Vector3.new(math.cos(angle) * distance, 0, math.sin(angle) * distance)
-                local targetPos = SECRET_SPOT + offset
-                pcall(function()
-                    pData.humanoid:MoveTo(targetPos)
-                end)
-            end
+            Utils.randomWalkAt(SECRET_SPOT, 6)
             task.wait(math.random(15, 30) / 10)
         end
     end)
@@ -560,14 +567,7 @@ function Safety.evacuateAndHide(reason)
         local dangerTimer = 0
         -- Check both Enabled (single) and BossLoopEnabled (advanced) — either means we should wait
         while BossFarm.Settings.Enabled or wasInBossLoop do
-            local pData = Utils.getPlayerData()
-            if pData then
-                local angle = math.random() * math.pi * 2
-                local distance = math.random() * 6
-                local offset = Vector3.new(math.cos(angle) * distance, 0, math.sin(angle) * distance)
-                local targetPos = SECRET_SPOT + offset
-                pcall(function() pData.humanoid:MoveTo(targetPos) end)
-            end
+            Utils.randomWalkAt(SECRET_SPOT, 6)
             
             local senseActive, sensePlayer = Safety.isChakraSenseActive()
             if senseActive then
@@ -1358,8 +1358,8 @@ function Farm.farmBoss(hum, model, bossName)
                 local regenData = Utils.getPlayerData()
                 if not regenData then break end
                 
-                -- Keep us at the safe spot during regen
-                regenData.rootPart.CFrame = CFrame.new(SECRET_SPOT)
+                -- Walk randomly at secret spot (looks natural if a mod is watching)
+                Utils.randomWalkAt(SECRET_SPOT, 6)
                 
                 if regenData.humanoid.Health >= regenData.humanoid.MaxHealth then
                     Utils.log("HP fully regenerated!")
@@ -1378,7 +1378,7 @@ function Farm.farmBoss(hum, model, bossName)
                     return
                 end
                 
-                task.wait(0.5)
+                task.wait(math.random(10, 20) / 10) -- Randomized wait looks more natural
             end
             
             -- After regen, DON'T break — re-enter the loop to re-engage the SAME boss
