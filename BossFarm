@@ -1000,114 +1000,94 @@ function Loot.collectNearBoss(bossName, config)
     local dataEvent = GetDataEvent()
     if not dataEvent then return end
     
-    -- Phase 1: Stay at loot spot for the full 15 seconds, holding position
-    Utils.log("Waiting 15s for loot to spawn for " .. bossName)
-    Utils.notify("Waiting 15s for Boss Loot...", 5)
-    
-    local startWait = tick()
-    while tick() - startWait < 15 do
-        pData = Utils.getPlayerData()
-        if pData then pData.rootPart.CFrame = CFrame.new(lootSpot) end
+    -- Helper: quick pickup of a single item
+    local function pickupItem(entry)
+        if not entry.obj.Parent then return true end
+        local pd = Utils.getPlayerData()
+        if pd then pd.rootPart.CFrame = CFrame.new(entry.pos + Vector3.new(0, 3, 0)) end
         
-        -- Active Safety Checks
+        -- Spam pickup for up to 0.4s or until item is gone
+        local spamEnd = tick() + 0.4
+        while tick() < spamEnd do
+            if not entry.obj.Parent then return true end
+            pcall(function() dataEvent:FireServer("PickUp", entry.id) end)
+            task.wait(0.05)
+        end
+        
+        return not entry.obj.Parent
+    end
+    
+    -- Helper: safety check (returns true if danger detected)
+    local function checkSafety()
         local senseActive, sensePlayer = Safety.isChakraSenseActive()
         if senseActive then
             if BossFarm.Settings.ServerHopIfChakraSense then
-                Safety.evacuateAndHop("Chakra Sense (" .. sensePlayer .. ") while waiting for loot!")
+                Safety.evacuateAndHop("Chakra Sense (" .. sensePlayer .. ") while looting!")
             else
-                Safety.evacuateAndHide("Chakra Sense (" .. sensePlayer .. ") while waiting for loot!")
+                Safety.evacuateAndHide("Chakra Sense (" .. sensePlayer .. ") while looting!")
             end
-            return
+            return true
         end
         local contested, nearPlayer = Safety.isPlayerNearPosition(lootSpot, BossFarm.Settings.PlayerDetectionRadius)
         if contested then
             if BossFarm.Settings.ServerHopIfChakraSense then
-                Safety.evacuateAndHop("Players nearby! (" .. tostring(nearPlayer) .. ") while waiting for loot!")
+                Safety.evacuateAndHop("Players nearby! (" .. tostring(nearPlayer) .. ") while looting!")
             else
-                Safety.evacuateAndHide("Players nearby! (" .. tostring(nearPlayer) .. ") while waiting for loot!")
+                Safety.evacuateAndHide("Players nearby! (" .. tostring(nearPlayer) .. ") while looting!")
             end
-            return
+            return true
         end
-        
-        task.wait()
+        return false
     end
     
-    -- Phase 2: Scan for all items AFTER the full 15s wait
-    local items = Loot.scanLootItems(lootSpot)
-    
-    if #items == 0 then
-        Utils.notify("No boss loot found after 15s.", 2)
-        Webhook.send("📦 No Loot", bossName .. " - No loot found after 15s wait.", 9807270)
-        return
-    end
-    
-    -- Phase 3: Pick up all items one-by-one
-    table.sort(items, function(a, b) return a.dist < b.dist end)
+    Utils.log("Collecting loot for " .. bossName)
+    Utils.notify("Collecting loot...", 3)
     
     local collectedNames = {}
-    for _, entry in ipairs(items) do
-        if not entry.obj.Parent then continue end
-        pData = Utils.getPlayerData()
-        if not pData then break end
-        
-        pData.rootPart.CFrame = CFrame.new(entry.pos + Vector3.new(0, 3, 0))
-        task.wait(0.3) -- settle
-        
-        local spamEnd = tick() + 0.8
-        while tick() < spamEnd do
-            if not entry.obj.Parent then break end -- Item is gone, picked up successfully!
-            
-            -- Active Safety Checks
-            local senseActive, sensePlayer = Safety.isChakraSenseActive()
-            if senseActive then
-                if BossFarm.Settings.ServerHopIfChakraSense then
-                    Safety.evacuateAndHop("Chakra Sense (" .. sensePlayer .. ") while looting!")
-                else
-                    Safety.evacuateAndHide("Chakra Sense (" .. sensePlayer .. ") while looting!")
-                end
-                return
-            end
-            local contested, nearPlayer = Safety.isPlayerNearPosition(entry.pos, BossFarm.Settings.PlayerDetectionRadius)
-            if contested then
-                if BossFarm.Settings.ServerHopIfChakraSense then
-                    Safety.evacuateAndHop("Players nearby! (" .. tostring(nearPlayer) .. ") while looting!")
-                else
-                    Safety.evacuateAndHide("Players nearby! (" .. tostring(nearPlayer) .. ") while looting!")
-                end
-                return
-            end
-            
-            pcall(function() dataEvent:FireServer("PickUp", entry.id) end)
-            task.wait(0.1)
-        end
-        
-        if not entry.obj.Parent then
-            table.insert(collectedNames, entry.name)
-        end
-        task.wait(0.2)
-    end
+    local startTime = tick()
+    local maxWait = 8 -- Max seconds to wait for loot
+    local lastScanCount = 0
+    local noNewItemTimer = 0
     
-    -- Phase 4: Do a second sweep in case items spawned late
-    local extraItems = Loot.scanLootItems(lootSpot)
-    for _, entry in ipairs(extraItems) do
-        if not entry.obj.Parent then continue end
+    -- Dynamic loop: scan + collect simultaneously, exit when no new items for 3s or 8s total
+    while tick() - startTime < maxWait do
+        -- Hold position at loot spot
         pData = Utils.getPlayerData()
-        if not pData then break end
+        if pData then pData.rootPart.CFrame = CFrame.new(lootSpot) end
         
-        pData.rootPart.CFrame = CFrame.new(entry.pos + Vector3.new(0, 3, 0))
-        task.wait(0.3)
+        -- Safety check
+        if checkSafety() then return end
         
-        local spamEnd = tick() + 0.8
-        while tick() < spamEnd do
-            if not entry.obj.Parent then break end
-            pcall(function() dataEvent:FireServer("PickUp", entry.id) end)
-            task.wait(0.1)
+        -- Scan for items
+        local items = Loot.scanLootItems(lootSpot)
+        
+        if #items > 0 then
+            -- Pick up everything we found
+            table.sort(items, function(a, b) return a.dist < b.dist end)
+            for _, entry in ipairs(items) do
+                if checkSafety() then return end
+                if pickupItem(entry) then
+                    table.insert(collectedNames, entry.name)
+                end
+            end
+            
+            -- If we found new items, reset the no-new-item timer
+            if #items > lastScanCount then
+                noNewItemTimer = 0
+            else
+                noNewItemTimer = noNewItemTimer + 1
+            end
+            lastScanCount = #items
+        else
+            noNewItemTimer = noNewItemTimer + 1
         end
         
-        if not entry.obj.Parent then
-            table.insert(collectedNames, entry.name)
+        -- If we've collected at least 1 item and no new items for 3 scans, we're done
+        if #collectedNames > 0 and noNewItemTimer >= 3 then
+            break
         end
-        task.wait(0.2)
+        
+        task.wait(1) -- Scan every second
     end
     
     local lootSummary = #collectedNames > 0 and table.concat(collectedNames, ", ") or "None"
@@ -1295,6 +1275,32 @@ function Farm.farmBoss(hum, model, bossName)
     if not pData then return end
     local config = BOSS_CONFIGS[bossName]
     if not config then return end
+    
+    -- *** PRE-ENGAGEMENT SAFETY CHECK ***
+    -- Check if anyone is near the boss BEFORE teleporting to it
+    -- This prevents the suspicious "teleport to boss feet → immediately flee" pattern
+    local contested, nearPlayer = Safety.isBossContested(model, BossFarm.Settings.PlayerDetectionRadius)
+    if contested then
+        Utils.log("Pre-engagement: Players near " .. bossName .. " (" .. tostring(nearPlayer) .. "), aborting!")
+        if BossFarm.Settings.ServerHopIfChakraSense then
+            Safety.evacuateAndHop("Players near " .. bossName .. " (pre-engage: " .. tostring(nearPlayer) .. ")")
+        else
+            Safety.evacuateAndHide("Players near " .. bossName .. " (pre-engage: " .. tostring(nearPlayer) .. ")")
+        end
+        return
+    end
+    
+    -- Check chakra sense before engaging
+    local senseActive, sensePlayer = Safety.isChakraSenseActive()
+    if senseActive then
+        Utils.log("Pre-engagement: Chakra Sense active (" .. tostring(sensePlayer) .. "), aborting!")
+        if BossFarm.Settings.ServerHopIfChakraSense then
+            Safety.evacuateAndHop("Chakra Sense (pre-engage: " .. tostring(sensePlayer) .. ")")
+        else
+            Safety.evacuateAndHide("Chakra Sense (pre-engage: " .. tostring(sensePlayer) .. ")")
+        end
+        return
+    end
     
     State.currentBoss = bossName
     State.currentModel = model
