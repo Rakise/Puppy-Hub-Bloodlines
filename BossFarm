@@ -39,8 +39,8 @@ BossFarm.Settings = {
     AttackInterval = 0.12,
     HealthCheckInterval = 0.3,
     PlayerDetectionRadius = 300,
-    PlayerVerticalTolerance = 120,
-    AutoLootOnKill = false,
+    PlayerVerticalTolerance = 150,
+    AutoLootOnKill = true,
     -- Advanced Boss Loop
     BossLoopEnabled = false,
     HopAfterLoop = false,
@@ -534,25 +534,36 @@ function Detection.findAnySelectedBoss()
 end
 
 function Detection.triggerSpawnIfNeeded(bossName, config)
-    if not config.triggerSpawn then return end
+    if not config.triggerSpawn then return false end
+    
+    local targetPos = nil
     if config.triggerPos then
-        local pData = Utils.getPlayerData()
-        if pData then
-            pData.rootPart.CFrame = CFrame.new(config.triggerPos)
-        end
-        task.wait(2)
+        targetPos = config.triggerPos
     elseif bossName == "Lava Snake" then
+        targetPos = Vector3.new(-547.6, -541.7, -1281.8)
+    end
+    
+    if targetPos then
+        local contested, nearPlayer = Safety.isPlayerNearPosition(targetPos, BossFarm.Settings.PlayerDetectionRadius)
+        if contested then
+            Safety.evacuateAndHop("Players at " .. bossName .. " spawn! (" .. tostring(nearPlayer) .. ")")
+            return false
+        end
+        
         local pData = Utils.getPlayerData()
         if pData then
-            pData.rootPart.CFrame = CFrame.new(-547.6, -541.7, -1281.8)
+            pData.rootPart.CFrame = CFrame.new(targetPos)
         end
         task.wait(2)
+        return true
     end
+    return false
 end
 
 function Detection.waitForBossSpawn(bossName, config, timeout)
     timeout = timeout or 16
     Detection.triggerSpawnIfNeeded(bossName, config)
+    if not State.running then return nil, nil end
     
     local start = tick()
     repeat
@@ -1194,6 +1205,7 @@ function Farm.start()
                         local config = BOSS_CONFIGS[name]
                         if config and config.triggerSpawn then
                             Detection.triggerSpawnIfNeeded(name, config)
+                            if not State.running then return end
                             hum, model = Detection.findBoss(name)
                             if hum and model then
                                 bossName = name
