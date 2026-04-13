@@ -204,6 +204,12 @@ local State = {
     -- Boss Loop
     bossLoopThread = nil,
     dangerMonitorThread = nil,
+    -- Boss Loop resume tracking
+    bossLoopIndex = 0,       -- tracks which boss in the loop we're on (for resume)
+    -- Boss death flag (prevents anchor from calling stopCurrent on boss death)
+    bossDeathDetected = false,
+    -- Looting flag (prevents farmBoss from exiting during loot)
+    isLooting = false,
 }
 
 -- ============================================
@@ -538,6 +544,10 @@ function Safety.evacuateAndHide(reason)
     Utils.log("Hiding: " .. tostring(reason))
     Utils.notify("Hiding at Safe Spot! Waiting for Chakra Sense to end...", 5)
     
+    -- Remember if we were in boss loop mode and what index we were at
+    local wasInBossLoop = BossFarm.Settings.BossLoopEnabled
+    local resumeIndex = State.bossLoopIndex
+    
     local pd = Utils.getPlayerData()
     if pd then pd.rootPart.CFrame = CFrame.new(SECRET_SPOT) end
     
@@ -548,7 +558,8 @@ function Safety.evacuateAndHide(reason)
     task.spawn(function()
         local safeTimer = 0
         local dangerTimer = 0
-        while BossFarm.Settings.Enabled do
+        -- Check both Enabled (single) and BossLoopEnabled (advanced) — either means we should wait
+        while BossFarm.Settings.Enabled or wasInBossLoop do
             local pData = Utils.getPlayerData()
             if pData then
                 local angle = math.random() * math.pi * 2
@@ -576,13 +587,14 @@ function Safety.evacuateAndHide(reason)
             task.wait(2)
         end
         
-        if BossFarm.Settings.Enabled then
-            Utils.notify("Coast is clear! Resuming Farm...", 5)
-            if BossFarm.Settings.BossLoopEnabled then
-                Farm.startLoop()
-            else
-                Farm.startSingle()
-            end
+        Utils.notify("Coast is clear! Resuming Farm...", 5)
+        if wasInBossLoop then
+            -- Restore boss loop state and resume from where we left off
+            BossFarm.Settings.BossLoopEnabled = true
+            State.bossLoopIndex = resumeIndex
+            BossFarm.startLoop()
+        elseif BossFarm.Settings.Enabled then
+            Farm.start()
         end
     end)
 end
@@ -1145,9 +1157,13 @@ function Positioning.startAnchoring(model, config)
         pcall(function()
             if not State.running then return end
             
+            -- If we're currently looting, don't reposition
+            if State.isLooting then return end
+            
             local hum = model:FindFirstChildOfClass("Humanoid")
             if not hum or not hum.Parent or hum.Health <= 0 then
-                Farm.stopCurrent()
+                -- Don't call Farm.stopCurrent() here — just flag and let farmBoss handle it
+                State.bossDeathDetected = true
                 return
             end
             
@@ -1274,6 +1290,8 @@ function Farm.farmBoss(hum, model, bossName)
     State.currentModel = model
     State.currentHumanoid = hum
     State.healthThreshold = pData.humanoid.MaxHealth * 0.5
+    State.bossDeathDetected = false
+    State.isLooting = false
     
     -- Detect and equip weapon
     State.detectedWeapon = Weapons.scanHotbar()
@@ -1307,24 +1325,98 @@ function Farm.farmBoss(hum, model, bossName)
         local cPData = Utils.getPlayerData()
         if not cPData then break end
         
-        -- Check if boss is still valid
-        if not hum or not hum.Parent or hum.Health <= 0 then
+        -- Check if boss died (either directly or via anchor flag from Kamui/model destruction)
+        local bossDead = State.bossDeathDetected
+            or not hum or not hum.Parent or hum.Health <= 0
+            or not model or not model.Parent
+        
+        if bossDead then
+            -- Stop combat systems first
             Farm.stopCurrent()
             Webhook.send("💀 Boss Killed", "**" .. bossName .. "** has been defeated!", 3066993)
+            
+            -- Loot collection: set flag to prevent anchor from repositioning us
             if BossFarm.Settings.AutoLootOnKill and config.lootSpot then
+                State.isLooting = true
+                Utils.log("Boss died, teleporting to loot spot for " .. bossName)
                 Loot.collectNearBoss(bossName, config)
+                State.isLooting = false
             end
             break
         end
         
-        -- Health threshold check
+        -- Health threshold check — wait for full regen before continuing
         if cPData.humanoid.Health < State.healthThreshold then
-            Utils.notify("Health low! Retreating...", 3)
+            Utils.notify("Health low! Retreating to regen...", 3)
             Farm.stopCurrent()
             local pd = Utils.getPlayerData()
             if pd then pd.rootPart.CFrame = CFrame.new(SECRET_SPOT) end
-            task.wait(3)
-            break
+            
+            -- Wait until HP is back to 100% (or farm is stopped)
+            Utils.log("Waiting for HP to regen to 100%...")
+            while State.running do
+                local regenData = Utils.getPlayerData()
+                if not regenData then break end
+                
+                -- Keep us at the safe spot during regen
+                regenData.rootPart.CFrame = CFrame.new(SECRET_SPOT)
+                
+                if regenData.humanoid.Health >= regenData.humanoid.MaxHealth then
+                    Utils.log("HP fully regenerated!")
+                    Utils.notify("HP full! Resuming fight...", 2)
+                    break
+                end
+                
+                -- Safety checks during regen
+                local senseActive, sensePlayer = Safety.isChakraSenseActive()
+                if senseActive then
+                    if BossFarm.Settings.ServerHopIfChakraSense then
+                        Safety.evacuateAndHop("Chakra Sense (" .. sensePlayer .. ") while regen!")
+                    else
+                        Safety.evacuateAndHide("Chakra Sense (" .. sensePlayer .. ") while regen!")
+                    end
+                    return
+                end
+                
+                task.wait(0.5)
+            end
+            
+            -- After regen, DON'T break — re-enter the loop to re-engage the SAME boss
+            -- We need to re-find the boss since we cleared state
+            if State.running then
+                local reHum, reModel = Detection.findBoss(bossName)
+                if reHum and reModel then
+                    -- Re-setup everything for this boss
+                    State.currentBoss = bossName
+                    State.currentModel = reModel
+                    State.currentHumanoid = reHum
+                    State.bossDeathDetected = false
+                    hum = reHum
+                    model = reModel
+                    
+                    local newPData = Utils.getPlayerData()
+                    if newPData then
+                        State.healthThreshold = newPData.humanoid.MaxHealth * 0.5
+                    end
+                    
+                    AnimMonitors.setup(model, bossName, config)
+                    Knocked.monitor(model)
+                    task.wait(0.5)
+                    Charging.start()
+                    Combat.enableNoclip()
+                    Positioning.startAnchoring(model, config)
+                    Combat.startAttacking(model)
+                    Utils.notify("Re-engaging: " .. bossName, 2)
+                else
+                    Utils.notify(bossName .. " despawned during regen.", 2)
+                    break
+                end
+            else
+                break
+            end
+            
+            -- Continue the while loop to keep fighting
+            continue
         end
         
         -- Periodic player proximity check
@@ -1351,7 +1443,7 @@ function Farm.stopCurrent()
     if State.anchorConn then State.anchorConn:Disconnect(); State.anchorConn = nil end
     if State.attackThread then pcall(task.cancel, State.attackThread); State.attackThread = nil end
     if State.knockedThread then pcall(task.cancel, State.knockedThread); State.knockedThread = nil end
-    if State.dangerMonitorThread then pcall(task.cancel, State.dangerMonitorThread); State.dangerMonitorThread = nil end
+    -- NOTE: Don't cancel dangerMonitorThread here — it's managed by evacuate functions
     
     -- Reset per-boss state
     State.bossHeightBoost = 0
@@ -1359,9 +1451,13 @@ function Farm.stopCurrent()
     State.hakuSafeSpot = false
     State.weaponHeightBoost = 0
     State.inDanger = false
-    State.currentBoss = nil
-    State.currentModel = nil
-    State.currentHumanoid = nil
+    State.bossDeathDetected = false
+    -- Don't clear currentBoss here during looting — farmBoss checks it in the while loop
+    if not State.isLooting then
+        State.currentBoss = nil
+        State.currentModel = nil
+        State.currentHumanoid = nil
+    end
     
     -- Disconnect all event connections and cancel threads
     Utils.disconnectAll()
@@ -1470,9 +1566,19 @@ function BossLoop.start()
                 break
             end
             
-            -- Iterate through each selected boss
-            for _, bossName in ipairs(loopList) do
+            -- Determine starting index (for resume after evacuate)
+            local startIdx = 1
+            if State.bossLoopIndex > 0 and State.bossLoopIndex <= #loopList then
+                startIdx = State.bossLoopIndex
+                Utils.log("Resuming boss loop from index " .. startIdx .. " (" .. loopList[startIdx] .. ")")
+            end
+            
+            -- Iterate through each selected boss (starting from resume index)
+            for i = startIdx, #loopList do
                 if not BossFarm.Settings.BossLoopEnabled or not State.running then break end
+                
+                local bossName = loopList[i]
+                State.bossLoopIndex = i  -- Track where we are in the loop
                 
                 local config = BOSS_CONFIGS[bossName]
                 if not config then continue end
@@ -1500,9 +1606,17 @@ function BossLoop.start()
                 -- Farm this boss (farmBoss handles loot collection internally before returning)
                 Farm.farmBoss(hum, model, bossName)
                 
+                -- Clear current boss state after farmBoss finishes (in case looting flag was set)
+                State.currentBoss = nil
+                State.currentModel = nil
+                State.currentHumanoid = nil
+                
                 -- Give a moment before moving to next boss
                 task.wait(2)
             end
+            
+            -- Full loop complete — reset index for next cycle
+            State.bossLoopIndex = 0
             
             -- Full loop complete
             if BossFarm.Settings.BossLoopEnabled and BossFarm.Settings.HopAfterLoop then
