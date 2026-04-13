@@ -442,7 +442,6 @@ local function AutoLoginRoutine()
                 task.wait(1)
                 
                 local clicked = false
-                continueBtn:Activate()
                 task.wait(0.1)
                 firesignal(continueBtn.HoverEnter)
                 task.wait(0.1)
@@ -458,11 +457,10 @@ local function AutoLoginRoutine()
                 task.wait(0.1)
                 firesignal(continueBtn.HoverLeave)
                 task.wait(0.1)
-                continueBtn:Activate()
                 -- Method 1: Built-in Activate() (simplest, no external tools)
                 if not clicked then
                     local ok = pcall(function()
-                        continueBtn:Activate()
+                        firesignal(continueBtn.Activated)
                     end)
                     if ok then
                         clicked = true
@@ -507,6 +505,18 @@ local function AutoLoginRoutine()
             task.wait(1)
             pcall(function() dataFunc:InvokeServer("LoadedIn") end)
             print("[PuppyHub] DataFunction LoadedIn sent!")
+            
+            -- Hide the menu since we bypassed the button click
+            pcall(function()
+                local cGui = PlayerGui:FindFirstChild("ClientGui")
+                if cGui then
+                    local mScreen = cGui:FindFirstChild("MenuScreen")
+                    if mScreen then
+                        mScreen.Visible = false
+                        print("[PuppyHub] MenuScreen hidden!")
+                    end
+                end
+            end)
         end
     end)
     
