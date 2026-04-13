@@ -44,6 +44,9 @@ BossFarm.Settings = {
     -- Advanced Boss Loop
     BossLoopEnabled = false,
     HopAfterLoop = false,
+    -- Auto Sell
+    AutoSellTrinkets = false,
+    AutoSellGems = false,
     -- Webhook
     WebhookURL = "",
 }
@@ -164,6 +167,13 @@ local GEM_NAMES = {
 local GemSet = {}
 for _, n in ipairs(GEM_NAMES) do GemSet[n] = true end
 local GEM_CAP = 20
+
+-- Trinket sell values (for bulk sell calculation)
+local TRINKET_VALUES = {
+    ["Silver Enclosed Ring"] = 3, ["Silver Ring"] = 2, ["Silver Bracelet"] = 2,
+    ["Gold Enclosed Ring"] = 5, ["Gold Necklace"] = 5, ["Silver Necklace"] = 3,
+    ["Gold Bracelet"] = 3, ["Gold Ring"] = 5,
+}
 
 -- ============================================
 -- SAFE SPOTS
@@ -988,12 +998,45 @@ function Loot.getGemCount()
     return count
 end
 
-function Loot.scanLootItems(lootSpot, skipGems)
+function Loot.getTrinketCount()
+    local count = 0
+    pcall(function()
+        local gui = LocalPlayer.PlayerGui
+        local clientGui = gui and gui:FindFirstChild("ClientGui")
+        local mainframe = clientGui and clientGui:FindFirstChild("Mainframe")
+        local loadout = mainframe and mainframe:FindFirstChild("Loadout")
+        if not loadout then return end
+        
+        local inv = loadout:FindFirstChild("Inventory")
+        local scroll = inv and inv:FindFirstChild("InventoryScroll")
+        if scroll then
+            for i = 1, 105 do
+                pcall(function()
+                    local slot = scroll:FindFirstChild("InvSlot" .. i)
+                    if not slot then return end
+                    local slotText = slot:FindFirstChild("SlotText")
+                    local itemName = slotText and slotText:IsA("TextLabel") and slotText.Text or ""
+                    -- Count trinkets (non-gem ones like rings, bracelets, necklaces)
+                    if TrinketSet[itemName] and not GemSet[itemName] then
+                        count = count + 1
+                    end
+                end)
+            end
+        end
+    end)
+    return count
+end
+
+local TRINKET_CAP = 20
+
+function Loot.scanLootItems(lootSpot, skipGems, skipTrinkets)
     local items = {}
     for _, obj in ipairs(workspace:GetDescendants()) do
         if (obj:IsA("Model") or obj:IsA("BasePart")) and TrinketSet[obj.Name] then
             -- Skip gems if at cap
             if skipGems and GemSet[obj.Name] then continue end
+            -- Skip trinkets (non-gem) if at cap
+            if skipTrinkets and TrinketSet[obj.Name] and not GemSet[obj.Name] then continue end
             
             local pos = nil
             if obj:IsA("BasePart") then
@@ -1080,6 +1123,14 @@ function Loot.collectNearBoss(bossName, config)
     Utils.log("Collecting loot for " .. bossName)
     Utils.notify("Collecting loot...", 3)
     
+    -- Check inventory caps before scanning
+    local gemCount = Loot.getGemCount()
+    local trinketCount = Loot.getTrinketCount()
+    local skipGems = gemCount >= GEM_CAP
+    local skipTrinkets = trinketCount >= TRINKET_CAP
+    if skipGems then Utils.log("Gems at cap (" .. gemCount .. "/" .. GEM_CAP .. "), skipping gem pickups.") end
+    if skipTrinkets then Utils.log("Trinkets at cap (" .. trinketCount .. "/" .. TRINKET_CAP .. "), skipping trinket pickups.") end
+    
     local collectedNames = {}
     local startTime = tick()
     local maxWait = 8 -- Max seconds to wait for loot
@@ -1095,8 +1146,8 @@ function Loot.collectNearBoss(bossName, config)
         -- Safety check
         if checkSafety() then return end
         
-        -- Scan for items
-        local items = Loot.scanLootItems(lootSpot)
+        -- Scan for items (skipping capped categories)
+        local items = Loot.scanLootItems(lootSpot, skipGems, skipTrinkets)
         
         if #items > 0 then
             -- Pick up everything we found
@@ -1626,8 +1677,20 @@ function BossLoop.start()
                 Utils.log("Resuming boss loop from index " .. startIdx .. " (" .. loopList[startIdx] .. ")")
             end
             
-            -- Iterate through each selected boss (starting from resume index)
+            -- Iterate through each selected boss
+            -- If resuming from middle, do startIdx..#list, then 1..startIdx-1 to complete full cycle
+            local indicesToProcess = {}
             for i = startIdx, #loopList do
+                table.insert(indicesToProcess, i)
+            end
+            if startIdx > 1 then
+                -- Wrap around: farm the bosses we skipped at the beginning
+                for i = 1, startIdx - 1 do
+                    table.insert(indicesToProcess, i)
+                end
+            end
+            
+            for _, i in ipairs(indicesToProcess) do
                 if not BossFarm.Settings.BossLoopEnabled or not State.running then break end
                 
                 local bossName = loopList[i]
@@ -1670,6 +1733,100 @@ function BossLoop.start()
             
             -- Full loop complete — reset index for next cycle
             State.bossLoopIndex = 0
+            
+            -- Auto sell at end of loop
+            if BossFarm.Settings.AutoSellTrinkets or BossFarm.Settings.AutoSellGems then
+                Utils.log("Loop complete — running auto sell...")
+                pcall(function()
+                    local dataFunc = GetDataFunction()
+                    if not dataFunc then
+                        Utils.log("DataFunction not found, skipping sell.")
+                        return
+                    end
+                    
+                    if BossFarm.Settings.AutoSellTrinkets then
+                        -- Calculate trinket sell value from inventory
+                        local trinketValue = 0
+                        pcall(function()
+                            local gui = LocalPlayer.PlayerGui
+                            local clientGui = gui and gui:FindFirstChild("ClientGui")
+                            local mainframe = clientGui and clientGui:FindFirstChild("Mainframe")
+                            local loadout = mainframe and mainframe:FindFirstChild("Loadout")
+                            if not loadout then return end
+                            local inv = loadout:FindFirstChild("Inventory")
+                            local scroll = inv and inv:FindFirstChild("InventoryScroll")
+                            if not scroll then return end
+                            for i = 1, 105 do
+                                pcall(function()
+                                    local slot = scroll:FindFirstChild("InvSlot" .. i)
+                                    if not slot then return end
+                                    local slotText = slot:FindFirstChild("SlotText")
+                                    local itemName = slotText and slotText:IsA("TextLabel") and slotText.Text or ""
+                                    local val = TRINKET_VALUES[itemName]
+                                    if val then
+                                        local qty = 1
+                                        pcall(function()
+                                            local itemNum = slot:FindFirstChild("ItemNumber")
+                                            local numLabel = itemNum and itemNum:FindFirstChild("Number")
+                                            if numLabel and numLabel:IsA("TextLabel") and numLabel.Text ~= "" then
+                                                local n = numLabel.Text:match("x(%d+)") or numLabel.Text:match("(%d+)")
+                                                if n then qty = tonumber(n) or 1 end
+                                            end
+                                        end)
+                                        trinketValue = trinketValue + (val * qty)
+                                    end
+                                end)
+                            end
+                        end)
+                        if trinketValue > 0 then
+                            pcall(function() dataFunc:InvokeServer("SellingBulk", trinketValue, "Trinket") end)
+                            Utils.notify("💰 Auto-sold trinkets (" .. trinketValue .. " value)", 3)
+                            Webhook.send("💰 Auto Sell", "Bulk sold **Trinkets** (value: " .. trinketValue .. ")", 15844367)
+                        end
+                    end
+                    
+                    if BossFarm.Settings.AutoSellGems then
+                        -- Calculate gem sell value
+                        local gemValue = 0
+                        pcall(function()
+                            local gui = LocalPlayer.PlayerGui
+                            local clientGui = gui and gui:FindFirstChild("ClientGui")
+                            local mainframe = clientGui and clientGui:FindFirstChild("Mainframe")
+                            local loadout = mainframe and mainframe:FindFirstChild("Loadout")
+                            if not loadout then return end
+                            local inv = loadout:FindFirstChild("Inventory")
+                            local scroll = inv and inv:FindFirstChild("InventoryScroll")
+                            if not scroll then return end
+                            for i = 1, 105 do
+                                pcall(function()
+                                    local slot = scroll:FindFirstChild("InvSlot" .. i)
+                                    if not slot then return end
+                                    local slotText = slot:FindFirstChild("SlotText")
+                                    local itemName = slotText and slotText:IsA("TextLabel") and slotText.Text or ""
+                                    if GemSet[itemName] then
+                                        local qty = 1
+                                        pcall(function()
+                                            local itemNum = slot:FindFirstChild("ItemNumber")
+                                            local numLabel = itemNum and itemNum:FindFirstChild("Number")
+                                            if numLabel and numLabel:IsA("TextLabel") and numLabel.Text ~= "" then
+                                                local n = numLabel.Text:match("x(%d+)") or numLabel.Text:match("(%d+)")
+                                                if n then qty = tonumber(n) or 1 end
+                                            end
+                                        end)
+                                        gemValue = gemValue + (10 * qty)
+                                    end
+                                end)
+                            end
+                        end)
+                        if gemValue > 0 then
+                            pcall(function() dataFunc:InvokeServer("SellingBulk", gemValue, "Gem") end)
+                            Utils.notify("💎 Auto-sold gems (" .. gemValue .. " value)", 3)
+                            Webhook.send("💎 Auto Sell", "Bulk sold **Gems** (value: " .. gemValue .. ")", 3447003)
+                        end
+                    end
+                end)
+                task.wait(1)
+            end
             
             -- Full loop complete
             if BossFarm.Settings.BossLoopEnabled and BossFarm.Settings.HopAfterLoop then

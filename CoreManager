@@ -271,6 +271,8 @@ local Config = {
     BossServerHopIfChakraSense = false,
     BossHopAfterLoop = false,
     BossAutoLootOnKill = false,
+    BossAutoSellTrinkets = false,
+    BossAutoSellGems = false,
     BossWebhookURL = "",
     -- Visual/Misc persistence (cross-hop)
     PlayerESP = false,
@@ -315,6 +317,8 @@ local function LoadConfig()
             if decoded.BossServerHopIfChakraSense ~= nil then Config.BossServerHopIfChakraSense = decoded.BossServerHopIfChakraSense end
             if decoded.BossHopAfterLoop ~= nil then Config.BossHopAfterLoop = decoded.BossHopAfterLoop end
             if decoded.BossAutoLootOnKill ~= nil then Config.BossAutoLootOnKill = decoded.BossAutoLootOnKill end
+            if decoded.BossAutoSellTrinkets ~= nil then Config.BossAutoSellTrinkets = decoded.BossAutoSellTrinkets end
+            if decoded.BossAutoSellGems ~= nil then Config.BossAutoSellGems = decoded.BossAutoSellGems end
             if decoded.BossWebhookURL ~= nil then Config.BossWebhookURL = decoded.BossWebhookURL end
             -- Visual/Misc
             if decoded.PlayerESP ~= nil then Config.PlayerESP = decoded.PlayerESP end
@@ -421,22 +425,48 @@ local function clickMouse()
     end
 end
 
+-- Checks if chakra sense is active (shared helper for forcefield logic)
+local function isChakraSenseDuringForcefield()
+    if not AutoFarmHandler or not AutoFarmHandler.checkSafety then return false end
+    local safe, reason = AutoFarmHandler.checkSafety()
+    return not safe, reason
+end
+
+-- Waits until chakra sense / danger clears, or hops if configured
+-- Returns false if we hopped (caller should abort), true if safe to continue
+local function waitForSafety(root)
+    local unsafeStart = tick()
+    while true do
+        local unsafe, reason = isChakraSenseDuringForcefield()
+        if not unsafe then return true end -- Safe again, continue
+        
+        -- If unsafe for >15s, hop
+        if tick() - unsafeStart > 15 and Config.ServerHopOnDanger and AutoFarmHandler.executeServerHop then
+            print("[PuppyHub] ⚠️ Danger persisted 15s during forcefield: " .. tostring(reason) .. ". Hopping...")
+            root.CFrame = CFrame.new(-3933, 1120, -4571)
+            AutoFarmHandler.executeServerHop()
+            return false
+        end
+        
+        task.wait(0.5)
+    end
+end
+
 local function tweenForcefieldCFrameSync(root, targetCFrame, duration)
     local startTime = tick()
     local startCFrame = root.CFrame
     while (tick() - startTime) < duration do
-        if AutoFarmHandler and AutoFarmHandler.checkSafety then
-            local safe, reason = AutoFarmHandler.checkSafety()
-            if not safe then
-                if Config.ServerHopOnDanger and AutoFarmHandler.executeServerHop then
-                    print("[PuppyHub] ⚠️ Unsafe during forcefield tween: " .. tostring(reason) .. ". Hopping...")
-                    root.CFrame = CFrame.new(-3933, 1120, -4571)
-                    AutoFarmHandler.executeServerHop()
-                    return false
-                else
-                    print("[PuppyHub] ⚠️ Unsafe: " .. tostring(reason) .. " but hopping is disabled.")
-                end
-            end
+        -- Check for danger during tween
+        local unsafe, reason = isChakraSenseDuringForcefield()
+        if unsafe then
+            -- PAUSE the tween — don't tween back, just freeze and wait
+            print("[PuppyHub] ⏸️ Danger during tween: " .. tostring(reason) .. ". Pausing...")
+            local canContinue = waitForSafety(root)
+            if not canContinue then return false end
+            -- Reset tween timing from current position
+            print("[PuppyHub] ▶️ Danger cleared, resuming tween...")
+            startTime = tick() - (tick() - startTime) -- Preserve elapsed progress
+            startCFrame = root.CFrame
         end
         local alpha = TweenService:GetValue((tick() - startTime) / duration, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
         root.CFrame = startCFrame:Lerp(targetCFrame, alpha)
@@ -449,36 +479,35 @@ end
 local function RemoveForcefield()
     print("[PuppyHub] Removing Forcefield Sequence Initiated...")
     
+    -- Pre-check: wait for safety before even starting
+    local char = LocalPlayer.Character
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    if not root then return end
+    
+    local canStart = waitForSafety(root)
+    if not canStart then return end
+    
     if AutoFarmHandler and AutoFarmHandler.emergencyStop then
         AutoFarmHandler.emergencyStop()
     end
     
     StopMovementLoops()
 
-    local char = LocalPlayer.Character
-    local root = char and char:FindFirstChild("HumanoidRootPart")
-    if root then
-        local forwardPos = root.CFrame * CFrame.new(0, 0, -40)
-        local originalPos = root.CFrame
-        
-        local safe = tweenForcefieldCFrameSync(root, forwardPos, 0.5)
-        if not safe then return end
-        
-        task.wait(0.3)
-        
-        if AutoFarmHandler and AutoFarmHandler.checkSafety then
-            local stillSafe, r = AutoFarmHandler.checkSafety()
-            if not stillSafe and Config.ServerHopOnDanger and AutoFarmHandler.executeServerHop then
-                root.CFrame = CFrame.new(-3933, 1120, -4571)
-                AutoFarmHandler.executeServerHop()
-                return
-            end
-        end
-        
-        safe = tweenForcefieldCFrameSync(root, originalPos, 0.5)
-        if not safe then return end
-        print("[PuppyHub] Forcefield removed. Resume operations.")
-    end
+    local forwardPos = root.CFrame * CFrame.new(0, 0, -40)
+    local originalPos = root.CFrame
+    
+    local safe = tweenForcefieldCFrameSync(root, forwardPos, 0.5)
+    if not safe then return end
+    
+    task.wait(0.3)
+    
+    -- Check again between tweens
+    local canContinue = waitForSafety(root)
+    if not canContinue then return end
+    
+    safe = tweenForcefieldCFrameSync(root, originalPos, 0.5)
+    if not safe then return end
+    print("[PuppyHub] Forcefield removed. Resume operations.")
 
     StartMovementLoops()
 end
@@ -555,6 +584,8 @@ local function AutoLoginRoutine()
         BossFarm.Settings.ServerHopIfChakraSense = Config.BossServerHopIfChakraSense
         BossFarm.Settings.HopAfterLoop = Config.BossHopAfterLoop
         BossFarm.Settings.AutoLootOnKill = Config.BossAutoLootOnKill
+        BossFarm.Settings.AutoSellTrinkets = Config.BossAutoSellTrinkets
+        BossFarm.Settings.AutoSellGems = Config.BossAutoSellGems
         BossFarm.Settings.WebhookURL = Config.BossWebhookURL or ""
         
         task.wait(2) -- Let game fully load
@@ -599,6 +630,8 @@ if BossFarm then
     BossFarm.Settings.ServerHopIfNoBoss = Config.BossServerHopIfNoBoss
     BossFarm.Settings.HopAfterLoop = Config.BossHopAfterLoop
     BossFarm.Settings.AutoLootOnKill = Config.BossAutoLootOnKill
+    BossFarm.Settings.AutoSellTrinkets = Config.BossAutoSellTrinkets
+    BossFarm.Settings.AutoSellGems = Config.BossAutoSellGems
     BossFarm.Settings.SelectedBosses = Config.BossSelectedBosses or {}
     BossFarm.Settings.WebhookURL = Config.BossWebhookURL or ""
 end
@@ -1016,6 +1049,28 @@ if BossFarm and AutoFarmHandler then
         Callback = function(val)
             BossFarm.Settings.ServerHopIfChakraSense = val
             Config.BossServerHopIfChakraSense = val
+            SaveConfig()
+        end
+    })
+
+    FarmRight:AddToggle('AutoSellTrinkets', {
+        Text = 'Auto Sell Trinkets',
+        Default = Config.BossAutoSellTrinkets or false,
+        Tooltip = 'Bulk sells trinkets at the end of each boss loop cycle.',
+        Callback = function(val)
+            BossFarm.Settings.AutoSellTrinkets = val
+            Config.BossAutoSellTrinkets = val
+            SaveConfig()
+        end
+    })
+
+    FarmRight:AddToggle('AutoSellGems', {
+        Text = 'Auto Sell Gems',
+        Default = Config.BossAutoSellGems or false,
+        Tooltip = 'Bulk sells gems at the end of each boss loop cycle.',
+        Callback = function(val)
+            BossFarm.Settings.AutoSellGems = val
+            Config.BossAutoSellGems = val
             SaveConfig()
         end
     })
