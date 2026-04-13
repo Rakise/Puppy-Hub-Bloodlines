@@ -16,16 +16,22 @@ local BRAZIL_HUB_BASE_URL = "https://ghproxy.net/https://raw.githubusercontent.c
 local REPO_BASE_URL = 'https://ghproxy.net/https://raw.githubusercontent.com/violin-suzutsuki/LinoriaLib/refs/heads/main/'
 local CONFIG_FILE = "PuppyHub_Bloodlines_Config.json"
 
--- Load Library
+-- Load Library (stagger to prevent freeze)
+print("[PuppyHub] Loading UI Library...")
 local Library = loadstring(game:HttpGet(REPO_BASE_URL .. 'Library.lua'))()
+task.wait()
 local ThemeManager = loadstring(game:HttpGet(REPO_BASE_URL .. 'addons/ThemeManager.lua'))()
+task.wait()
 local SaveManager = loadstring(game:HttpGet(REPO_BASE_URL .. 'addons/SaveManager.lua'))()
+task.wait()
+print("[PuppyHub] UI Library loaded!")
 
--- Helper: Safe Require
+-- Helper: Safe Require (with yield between loads)
 local function safeRequire(url, ...)
     local success, result = pcall(function()
         return loadstring(game:HttpGet(url))()
     end)
+    task.wait() -- Yield after each HTTP fetch to prevent freeze
     if success then
         if type(result) == "table" and result.new then
             return result.new(...)
@@ -37,7 +43,8 @@ local function safeRequire(url, ...)
     end
 end
 
--- Load Modules
+-- Load Modules (staggered to prevent client crash)
+print("[PuppyHub] Loading modules...")
 local PlayerESPHandler = safeRequire(BRAZIL_HUB_BASE_URL .. "PlayerESPHandler")
 local MobESPHandler = safeRequire(BRAZIL_HUB_BASE_URL .. "MobESPHandler")
 local ItemESPHandler = safeRequire(BRAZIL_HUB_BASE_URL .. "ItemESPHandler")
@@ -49,6 +56,7 @@ local ObserveUI = safeRequire(BRAZIL_HUB_BASE_URL .. "ObserveUI", PlayerGui)
 local ChatLog = safeRequire(BRAZIL_HUB_BASE_URL .. "ChatLog", PlayerGui)
 local BossFarm = safeRequire(BRAZIL_HUB_BASE_URL .. "BossFarm")
 local AutoFarmHandler = safeRequire(BRAZIL_HUB_BASE_URL .. "AutoFarmHandler")
+print("[PuppyHub] All modules loaded!")
 
 -- ============================================================================
 -- GLOBAL STATE

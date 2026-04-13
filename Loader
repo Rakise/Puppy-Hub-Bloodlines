@@ -1,11 +1,78 @@
+-- ============================================================================
+-- Puppy Hub | Bloodlines Loader
+-- Waits for game to fully load before executing to prevent crashes
+-- ============================================================================
+
 local ScriptURL = "https://raw.githubusercontent.com/Rakise/Puppy-Hub-Bloodlines/refs/heads/main/CoreManager"
 
--- Executa o script agora (sempre)
-loadstring(game:HttpGet(ScriptURL))()
+-- Show loading notification
+pcall(function()
+    game:GetService("StarterGui"):SetCore("SendNotification", {
+        Title = "Puppy Hub 🐾",
+        Text = "Loading... Please wait.",
+        Duration = 5,
+    })
+end)
 
--- Garante a execução automática ao teleportar (caso o executor suporte)
+-- Wait for critical game systems before loading
+local function waitForGame()
+    -- 1. Wait for the game to finish loading
+    if not game:IsLoaded() then
+        game.Loaded:Wait()
+    end
+    
+    -- 2. Wait for our character to exist
+    local player = game:GetService("Players").LocalPlayer
+    if not player then return false end
+    
+    if not player.Character then
+        player.CharacterAdded:Wait()
+    end
+    
+    -- 3. Wait for PlayerGui (needed by UI library and modules)
+    player:WaitForChild("PlayerGui", 30)
+    
+    -- 4. Wait for ReplicatedStorage events (needed by farm systems)
+    local RS = game:GetService("ReplicatedStorage")
+    RS:WaitForChild("Events", 30)
+    
+    -- 5. Small breather to let Roblox finish initial rendering
+    task.wait(2)
+    
+    return true
+end
+
+-- Main execution
+task.spawn(function()
+    local ready = waitForGame()
+    if not ready then
+        warn("[PuppyHub] Game failed to load properly. Aborting.")
+        return
+    end
+    
+    -- Load the hub
+    local success, err = pcall(function()
+        loadstring(game:HttpGet(ScriptURL))()
+    end)
+    
+    if not success then
+        warn("[PuppyHub] Failed to load CoreManager: " .. tostring(err))
+        pcall(function()
+            game:GetService("StarterGui"):SetCore("SendNotification", {
+                Title = "Puppy Hub ❌",
+                Text = "Load failed! Check console.",
+                Duration = 10,
+            })
+        end)
+        return
+    end
+    
+    print("[PuppyHub] ✅ Loaded successfully!")
+end)
+
+-- Queue for teleport persistence (server hops)
+-- Queue the Loader itself so next server also waits for game before loading
+local LoaderURL = "https://raw.githubusercontent.com/Rakise/Puppy-Hub-Bloodlines/refs/heads/main/Loader"
 if queue_on_teleport then
-    queue_on_teleport('loadstring(game:HttpGet("' .. ScriptURL .. '"))()')
-else
-    print("Executor não possui suporte a 'queue_on_teleport'")
+    queue_on_teleport('loadstring(game:HttpGet("' .. LoaderURL .. '"))()')
 end
