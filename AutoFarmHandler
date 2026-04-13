@@ -581,67 +581,24 @@ local function stopTracking()
     State.PickupCache = {}
 end
 
-local currentMouseTask = nil
-
--- Smoothly tracks and moves mouse to a 3D part using relative movement
-local function trackAndMoveMouseTo(part)
-    if not mousemoverel then return false end
-    
-    local thisTask = coroutine.running()
-    
-    -- 1. Cancel any existing mouse task
-    if currentMouseTask and coroutine.status(currentMouseTask) == "running" then
-        task.cancel(currentMouseTask)
-    end
-    currentMouseTask = thisTask
-    
-    local success = false
-    
-    pcall(function()
-        local camera = Workspace.CurrentCamera
+-- Click at exact screen coordinates using VirtualInputManager (no physical mouse needed)
+local function virtualClickAt(x, y)
+    if VirtualInputManager then
+        VirtualInputManager:SendMouseButtonEvent(x, y, 0, true, game, 0)
+        task.wait(0.05)
+        VirtualInputManager:SendMouseButtonEvent(x, y, 0, false, game, 0)
+        return true
+    elseif mouse1click and mousemoverel then
+        -- Fallback: physical mouse
         local mouse = LocalPlayer:GetMouse()
-        local step = 40 -- pixels per step
-        
-        while part and part.Parent do
-            if State.IsDefending or State.IsHopping then break end
-            
-            -- Use WorldToScreenPoint to match mouse.X/Y (which account for GUI inset)
-            local screenPos, onScreen = camera:WorldToScreenPoint(part.Position)
-            if not onScreen then break end
-            
-            local targetX = screenPos.X
-            local targetY = screenPos.Y
-            
-            if math.abs(mouse.X - targetX) <= 1 and math.abs(mouse.Y - targetY) <= 1 then
-                success = true
-                break
-            end
-            
-            local dx = math.clamp(targetX - mouse.X, -step, step)
-            local dy = math.clamp(targetY - mouse.Y, -step, step)
-            
-            mousemoverel(dx, dy)
-            task.wait(0.01)
-        end
-        
-        -- Final snap for precision
-        if success and part and part.Parent and not State.IsDefending and not State.IsHopping then
-            local screenPos, onScreen = camera:WorldToScreenPoint(part.Position)
-            if onScreen then
-                local finalDX = screenPos.X - mouse.X
-                local finalDY = screenPos.Y - mouse.Y
-                if finalDX ~= 0 or finalDY ~= 0 then
-                    mousemoverel(finalDX, finalDY)
-                end
-            end
-        end
-    end)
-    
-    if currentMouseTask == thisTask then
-        currentMouseTask = nil
+        local dx = x - mouse.X
+        local dy = y - mouse.Y
+        mousemoverel(dx, dy)
+        task.wait(0.05)
+        mouse1click()
+        return true
     end
-    
-    return success
+    return false
 end
 
 local function doPickup()
@@ -667,25 +624,16 @@ local function doPickup()
             local itemPos = item.Position -- We know it's a BasePart
             
             if itemPos and (root.Position - itemPos).Magnitude <= range then
-                -- Convert world position to screen position, matching GetMouse coords
+                -- Convert world position to screen position
                 local screenPos, onScreen = camera:WorldToScreenPoint(itemPos)
                 
                 if onScreen then
-                    -- Smoothly track and move mouse to the 3D fruit
-                    local moved = trackAndMoveMouseTo(item)
-                    
-                    if moved then
-                        task.wait(0.05) -- Small settle time
-                        -- Click the fruit
-                        if mouse1click then
-                            mouse1click()
-                            print("[AutoFarm] ✅ Picked up fruit: " .. item.Name)
-                        end
-                    else
-                        print("[AutoFarm] ⚠️ Failed/Interrupted tracking fruit: " .. item.Name)
+                    -- Instant virtual click at the fruit's screen position (no mouse movement)
+                    local clicked = virtualClickAt(screenPos.X, screenPos.Y)
+                    if clicked then
+                        print("[AutoFarm] ✅ Picked up fruit: " .. item.Name)
                     end
                 else
-                    -- Fruit is off-screen, skip for now
                     print("[AutoFarm] ⏭️ Fruit off-screen, skipping: " .. item.Name)
                 end
                 

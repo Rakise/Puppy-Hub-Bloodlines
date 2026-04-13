@@ -205,6 +205,19 @@ local Config = {
     BossHopAfterLoop = false,
     BossAutoLootOnKill = false,
     BossWebhookURL = "",
+    -- Visual/Misc persistence (cross-hop)
+    PlayerESP = false,
+    ObserveUI = false,
+    ChatLogs = false,
+    MobESP = false,
+    NpcESP = false,
+    TrinketESP = false,
+    FruitESP = false,
+    GemESP = false,
+    ChakraESP = false,
+    CorruptedESP = false,
+    TransTrail = false,
+    NoFog = false,
 }
 
 local function SaveConfig()
@@ -236,7 +249,19 @@ local function LoadConfig()
             if decoded.BossHopAfterLoop ~= nil then Config.BossHopAfterLoop = decoded.BossHopAfterLoop end
             if decoded.BossAutoLootOnKill ~= nil then Config.BossAutoLootOnKill = decoded.BossAutoLootOnKill end
             if decoded.BossWebhookURL ~= nil then Config.BossWebhookURL = decoded.BossWebhookURL end
-
+            -- Visual/Misc
+            if decoded.PlayerESP ~= nil then Config.PlayerESP = decoded.PlayerESP end
+            if decoded.ObserveUI ~= nil then Config.ObserveUI = decoded.ObserveUI end
+            if decoded.ChatLogs ~= nil then Config.ChatLogs = decoded.ChatLogs end
+            if decoded.MobESP ~= nil then Config.MobESP = decoded.MobESP end
+            if decoded.NpcESP ~= nil then Config.NpcESP = decoded.NpcESP end
+            if decoded.TrinketESP ~= nil then Config.TrinketESP = decoded.TrinketESP end
+            if decoded.FruitESP ~= nil then Config.FruitESP = decoded.FruitESP end
+            if decoded.GemESP ~= nil then Config.GemESP = decoded.GemESP end
+            if decoded.ChakraESP ~= nil then Config.ChakraESP = decoded.ChakraESP end
+            if decoded.CorruptedESP ~= nil then Config.CorruptedESP = decoded.CorruptedESP end
+            if decoded.TransTrail ~= nil then Config.TransTrail = decoded.TransTrail end
+            if decoded.NoFog ~= nil then Config.NoFog = decoded.NoFog end
         end
     end
 end
@@ -407,11 +432,61 @@ local function AutoLoginRoutine()
             local continueBtn = menuFrame:FindFirstChild("Continue")
             if continueBtn and continueBtn:IsA("ImageButton") then
                 task.wait(1)
-                print("[PuppyHub] Moving physical mouse to Continue button...")
-                moveMouseToGui(continueBtn)
-                task.wait(0.1)
-                clickMouse()
-                print("[PuppyHub] Continue clicked!")
+                
+                -- Try fully virtual click first (no physical mouse needed)
+                local virtualSuccess = false
+                if firesignal then
+                    print("[PuppyHub] Clicking Continue virtually via firesignal...")
+                    
+                    local function fireAllSignals(obj)
+                        -- Fire every relevant GUI interaction signal
+                        local signals = {
+                            "MouseButton1Click", "MouseButton1Down", "MouseButton1Up",
+                            "Activated", "MouseEnter", "InputBegan",
+                        }
+                        for _, sigName in ipairs(signals) do
+                            pcall(function()
+                                local sig = obj[sigName]
+                                if typeof(sig) == "RBXScriptSignal" then
+                                    firesignal(sig)
+                                end
+                            end)
+                        end
+                        -- Also try firing InputBegan with a mock mouse input
+                        pcall(function()
+                            if obj.InputBegan and typeof(obj.InputBegan) == "RBXScriptSignal" then
+                                local inputObj = Instance.new("InputObject")
+                                firesignal(obj.InputBegan, {
+                                    UserInputType = Enum.UserInputType.MouseButton1,
+                                    UserInputState = Enum.UserInputState.Begin,
+                                })
+                            end
+                        end)
+                    end
+                    
+                    -- Fire on the button itself
+                    fireAllSignals(continueBtn)
+                    
+                    -- Fire on all descendant GuiButtons too
+                    for _, desc in ipairs(continueBtn:GetDescendants()) do
+                        if desc:IsA("GuiButton") then
+                            fireAllSignals(desc)
+                        end
+                    end
+                    
+                    virtualSuccess = true
+                    task.wait(0.2)
+                    print("[PuppyHub] Continue clicked virtually!")
+                end
+                
+                -- Fallback: physical mouse if firesignal unavailable
+                if not virtualSuccess then
+                    print("[PuppyHub] firesignal unavailable, using physical mouse fallback...")
+                    moveMouseToGui(continueBtn)
+                    task.wait(0.1)
+                    clickMouse()
+                    print("[PuppyHub] Continue clicked (physical)!")
+                end
             end
         end
     end
@@ -466,6 +541,25 @@ local function AutoLoginRoutine()
             BossFarm.start()
         end
     end
+    
+    -- Restore Visual/Misc toggles after server hop
+    task.spawn(function()
+        task.wait(1) -- Let modules initialize
+        print("[PuppyHub] Restoring visual settings...")
+        if Config.PlayerESP and PlayerESPHandler then pcall(function() PlayerESPHandler:enable() end) end
+        if Config.ObserveUI and ObserveUI then pcall(function() ObserveUI:enable() end) end
+        if Config.ChatLogs and ChatLog then pcall(function() ChatLog:enable() end) end
+        if Config.MobESP and MobESPHandler then pcall(function() MobESPHandler:toggleMobs(true) end) end
+        if Config.NpcESP and MobESPHandler then pcall(function() MobESPHandler:toggleNPCs(true) end) end
+        if Config.TrinketESP and ItemESPHandler then pcall(function() ItemESPHandler:toggleCategory("Trinket", true) end) end
+        if Config.FruitESP and ItemESPHandler then pcall(function() ItemESPHandler:toggleCategory("Fruit", true) end) end
+        if Config.GemESP and ItemESPHandler then pcall(function() ItemESPHandler:toggleCategory("Gem", true) end) end
+        if Config.ChakraESP and ChakraESPHandler then pcall(function() ChakraESPHandler:enable() end) end
+        if Config.CorruptedESP and CorruptedESPHandler then pcall(function() CorruptedESPHandler:enable() end) end
+        if Config.TransTrail and TransTrail then pcall(function() TransTrail:enable() end) end
+        if Config.NoFog and NoFog then pcall(function() NoFog:enable() end) end
+        print("[PuppyHub] Visual settings restored!")
+    end)
 end
 
 LoadConfig()
@@ -483,7 +577,14 @@ if BossFarm then
 end
 
 -- Auto-login if we have anything to resume (summon OR boss farm)
-if Config.AutoSummon or Config.BossFarmEnabled or Config.BossLoopEnabled then
+-- Check if any feature needs auto-login (farming OR visuals)
+local needsAutoLogin = Config.AutoSummon or Config.BossFarmEnabled or Config.BossLoopEnabled
+    or Config.PlayerESP or Config.ObserveUI or Config.ChatLogs
+    or Config.MobESP or Config.NpcESP
+    or Config.TrinketESP or Config.FruitESP or Config.GemESP
+    or Config.ChakraESP or Config.CorruptedESP
+    or Config.TransTrail or Config.NoFog
+if needsAutoLogin then
     task.spawn(AutoLoginRoutine)
 end
 
@@ -901,8 +1002,10 @@ local MiscGroup = Tabs.Visuals:AddLeftGroupbox('Misc')
 
 PlayerGroup:AddToggle('PlayerESP', {
     Text = 'Enable Player ESP',
-    Default = false,
+    Default = Config.PlayerESP or false,
     Callback = function(val)
+        Config.PlayerESP = val
+        SaveConfig()
         if PlayerESPHandler then
             if val then
                 PlayerESPHandler:enable()
@@ -915,8 +1018,10 @@ PlayerGroup:AddToggle('PlayerESP', {
 
 PlayerGroup:AddToggle('ObserveUI', {
     Text = 'Observe UI',
-    Default = false,
+    Default = Config.ObserveUI or false,
     Callback = function(val)
+        Config.ObserveUI = val
+        SaveConfig()
         if ObserveUI then
             if val then
                 ObserveUI:enable()
@@ -929,8 +1034,10 @@ PlayerGroup:AddToggle('ObserveUI', {
 
 PlayerGroup:AddToggle('ChatLogs', {
     Text = 'Chat Logs',
-    Default = false,
+    Default = Config.ChatLogs or false,
     Callback = function(val)
+        Config.ChatLogs = val
+        SaveConfig()
         if ChatLog then
             if val then
                 ChatLog:enable()
@@ -944,8 +1051,10 @@ PlayerGroup:AddToggle('ChatLogs', {
 -- Item Group
 ItemGroup:AddToggle('MobESP', {
     Text = 'Mob ESP (Combat)',
-    Default = false,
+    Default = Config.MobESP or false,
     Callback = function(val)
+        Config.MobESP = val
+        SaveConfig()
         if MobESPHandler then
             MobESPHandler:toggleMobs(val)
         end
@@ -954,8 +1063,10 @@ ItemGroup:AddToggle('MobESP', {
 
 ItemGroup:AddToggle('NpcESP', {
     Text = 'NPC ESP (Dialog)',
-    Default = false,
+    Default = Config.NpcESP or false,
     Callback = function(val)
+        Config.NpcESP = val
+        SaveConfig()
         if MobESPHandler then
             MobESPHandler:toggleNPCs(val)
         end
@@ -966,8 +1077,10 @@ ItemGroup:AddDivider()
 
 ItemGroup:AddToggle('TrinketESP', {
     Text = 'Trinket ESP',
-    Default = false,
+    Default = Config.TrinketESP or false,
     Callback = function(val)
+        Config.TrinketESP = val
+        SaveConfig()
         if ItemESPHandler then
             ItemESPHandler:toggleCategory("Trinket", val)
         end
@@ -976,8 +1089,10 @@ ItemGroup:AddToggle('TrinketESP', {
 
 ItemGroup:AddToggle('FruitESP', {
     Text = 'Fruit ESP',
-    Default = false,
+    Default = Config.FruitESP or false,
     Callback = function(val)
+        Config.FruitESP = val
+        SaveConfig()
         if ItemESPHandler then
             ItemESPHandler:toggleCategory("Fruit", val)
         end
@@ -986,8 +1101,10 @@ ItemGroup:AddToggle('FruitESP', {
 
 ItemGroup:AddToggle('GemESP', {
     Text = 'Gem ESP',
-    Default = false,
+    Default = Config.GemESP or false,
     Callback = function(val)
+        Config.GemESP = val
+        SaveConfig()
         if ItemESPHandler then
             ItemESPHandler:toggleCategory("Gem", val)
         end
@@ -996,8 +1113,10 @@ ItemGroup:AddToggle('GemESP', {
 
 ItemGroup:AddToggle('ChakraESP', {
     Text = 'Chakra Point ESP',
-    Default = false,
+    Default = Config.ChakraESP or false,
     Callback = function(val)
+        Config.ChakraESP = val
+        SaveConfig()
         if ChakraESPHandler then
             if val then
                 ChakraESPHandler:enable()
@@ -1010,8 +1129,10 @@ ItemGroup:AddToggle('ChakraESP', {
 
 ItemGroup:AddToggle('CorruptedESP', {
     Text = 'Corrupted Point ESP',
-    Default = false,
+    Default = Config.CorruptedESP or false,
     Callback = function(val)
+        Config.CorruptedESP = val
+        SaveConfig()
         if CorruptedESPHandler then
             if val then
                 CorruptedESPHandler:enable()
@@ -1025,8 +1146,10 @@ ItemGroup:AddToggle('CorruptedESP', {
 -- Misc Group
 MiscGroup:AddToggle('TransTrailToggle', {
     Text = 'Trans Flag Trail',
-    Default = false,
+    Default = Config.TransTrail or false,
     Callback = function(val)
+        Config.TransTrail = val
+        SaveConfig()
         if TransTrail then
             if val then
                 TransTrail:enable()
@@ -1039,8 +1162,10 @@ MiscGroup:AddToggle('TransTrailToggle', {
 
 MiscGroup:AddToggle('NoFogToggle', {
     Text = 'No Fog',
-    Default = false,
+    Default = Config.NoFog or false,
     Callback = function(val)
+        Config.NoFog = val
+        SaveConfig()
         if NoFog then
             if val then
                 NoFog:enable()
