@@ -438,41 +438,61 @@ local function AutoLoginRoutine()
         local menuFrame = menuScreen:WaitForChild("Menu", 5)
         if menuFrame then
             local continueBtn = menuFrame:FindFirstChild("Continue")
-            if continueBtn and continueBtn:IsA("ImageButton") then
+            if continueBtn and continueBtn:IsA("GuiButton") then
                 task.wait(1)
                 
                 local clicked = false
                 
-                -- Primary: VirtualInputManager at button's pixel position (no physical mouse needed)
-                if VirtualInputManager then
-                    print("[PuppyHub] Clicking Continue via VirtualInputManager...")
-                    pcall(function()
-                        local pos = continueBtn.AbsolutePosition
-                        local size = continueBtn.AbsoluteSize
-                        local centerX = pos.X + size.X / 2
-                        local centerY = pos.Y + size.Y / 2
-                        
-                        -- Mouse down → hold → mouse up
-                        VirtualInputManager:SendMouseButtonEvent(centerX, centerY, 0, true, game, 0)
-                        task.wait(0.08)
-                        VirtualInputManager:SendMouseButtonEvent(centerX, centerY, 0, false, game, 0)
-                        
-                        clicked = true
-                        print("[PuppyHub] Continue clicked!")
+                -- Method 1: Built-in Activate() (simplest, no external tools)
+                if not clicked then
+                    local ok = pcall(function()
+                        continueBtn:Activate()
                     end)
+                    if ok then
+                        clicked = true
+                        print("[PuppyHub] Continue clicked via Activate()!")
+                    end
                 end
                 
-                -- Fallback: physical mouse (needs window focused)
+                -- Method 2: firesignal MouseButton1Click
+                if not clicked and firesignal then
+                    local ok = pcall(function()
+                        firesignal(continueBtn.MouseButton1Click)
+                    end)
+                    if ok then
+                        clicked = true
+                        print("[PuppyHub] Continue clicked via firesignal!")
+                    end
+                end
+                
+                -- Method 3: Physical mouse (last resort, needs window focused)
                 if not clicked then
                     print("[PuppyHub] Using physical mouse fallback...")
                     moveMouseToGui(continueBtn)
                     task.wait(0.1)
                     clickMouse()
+                    clicked = true
                     print("[PuppyHub] Continue clicked (physical)!")
                 end
+                
+                task.wait(1)
             end
         end
     end
+    
+    -- Fallback: If button didn't work or wasn't found, try DataFunction directly
+    -- This is what the game uses internally to process login
+    pcall(function()
+        local events = ReplicatedStorage:FindFirstChild("Events")
+        local dataFunc = events and events:FindFirstChild("DataFunction")
+        if dataFunc and dataFunc:IsA("RemoteFunction") then
+            print("[PuppyHub] Sending DataFunction LoadedIn fallback...")
+            pcall(function() dataFunc:InvokeServer("AmIModerator") end)
+            task.wait(1)
+            pcall(function() dataFunc:InvokeServer("LoadedIn") end)
+            print("[PuppyHub] DataFunction LoadedIn sent!")
+        end
+    end)
     
     task.wait(7)
     
