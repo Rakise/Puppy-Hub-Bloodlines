@@ -441,109 +441,29 @@ local function AutoLoginRoutine()
             if continueBtn and continueBtn:IsA("ImageButton") then
                 task.wait(1)
                 
-                -- Try fully virtual click first (no physical mouse needed)
-                local virtualSuccess = false
-                if firesignal then
-                    print("[PuppyHub] Clicking Continue virtually via firesignal...")
-                    
-                    -- Simulate realistic hover → click → leave sequence on a GUI button
-                    local function virtualClickButton(obj)
-                        -- Step 1: Hover enter (some games validate hover state before accepting clicks)
-                        pcall(function()
-                            if typeof(obj.MouseEnter) == "RBXScriptSignal" then
-                                firesignal(obj.MouseEnter)
-                            end
-                        end)
-                        
-                        task.wait(0.1) -- Small delay like a real mouse hovering before clicking
-                        
-                        -- Step 2: Mouse button down
-                        pcall(function()
-                            if typeof(obj.MouseButton1Down) == "RBXScriptSignal" then
-                                firesignal(obj.MouseButton1Down)
-                            end
-                        end)
-                        
-                        task.wait(0.05) -- Brief hold
-                        
-                        -- Step 3: Mouse button up
-                        pcall(function()
-                            if typeof(obj.MouseButton1Up) == "RBXScriptSignal" then
-                                firesignal(obj.MouseButton1Up)
-                            end
-                        end)
-                        
-                        -- Step 4: Click signal (fired after up)
-                        pcall(function()
-                            if typeof(obj.MouseButton1Click) == "RBXScriptSignal" then
-                                firesignal(obj.MouseButton1Click)
-                            end
-                        end)
-                        
-                        -- Step 5: Activated (generic interaction signal)
-                        pcall(function()
-                            if typeof(obj.Activated) == "RBXScriptSignal" then
-                                firesignal(obj.Activated)
-                            end
-                        end)
-                        
-                        -- Step 6: InputBegan with mouse input
-                        pcall(function()
-                            if typeof(obj.InputBegan) == "RBXScriptSignal" then
-                                firesignal(obj.InputBegan, {
-                                    UserInputType = Enum.UserInputType.MouseButton1,
-                                    UserInputState = Enum.UserInputState.Begin,
-                                })
-                            end
-                        end)
-                        
-                        task.wait(0.05)
-                        
-                        -- Step 7: Hover leave
-                        pcall(function()
-                            if typeof(obj.MouseLeave) == "RBXScriptSignal" then
-                                firesignal(obj.MouseLeave)
-                            end
-                        end)
-                    end
-                    
-                    -- Fire on the button itself
-                    virtualClickButton(continueBtn)
-                    
-                    -- Fire on all descendant GuiButtons too
-                    for _, desc in ipairs(continueBtn:GetDescendants()) do
-                        if desc:IsA("GuiButton") then
-                            virtualClickButton(desc)
-                        end
-                    end
-                    
-                    virtualSuccess = true
-                    task.wait(0.2)
-                    print("[PuppyHub] Continue clicked virtually!")
-                end
+                local clicked = false
                 
-                -- Fallback 1: VirtualInputManager at button's pixel position
-                if not virtualSuccess and VirtualInputManager then
-                    print("[PuppyHub] Trying VirtualInputManager at button position...")
+                -- Primary: VirtualInputManager at button's pixel position (no physical mouse needed)
+                if VirtualInputManager then
+                    print("[PuppyHub] Clicking Continue via VirtualInputManager...")
                     pcall(function()
-                        -- Get the center of the button on screen
                         local pos = continueBtn.AbsolutePosition
                         local size = continueBtn.AbsoluteSize
                         local centerX = pos.X + size.X / 2
                         local centerY = pos.Y + size.Y / 2
                         
-                        -- Simulate: mouse down → hold → mouse up (like a real click)
+                        -- Mouse down → hold → mouse up
                         VirtualInputManager:SendMouseButtonEvent(centerX, centerY, 0, true, game, 0)
                         task.wait(0.08)
                         VirtualInputManager:SendMouseButtonEvent(centerX, centerY, 0, false, game, 0)
                         
-                        virtualSuccess = true
-                        print("[PuppyHub] Continue clicked via VirtualInputManager!")
+                        clicked = true
+                        print("[PuppyHub] Continue clicked!")
                     end)
                 end
                 
-                -- Fallback 2: physical mouse (last resort, needs window focused)
-                if not virtualSuccess then
+                -- Fallback: physical mouse (needs window focused)
+                if not clicked then
                     print("[PuppyHub] Using physical mouse fallback...")
                     moveMouseToGui(continueBtn)
                     task.wait(0.1)
