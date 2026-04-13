@@ -10,9 +10,10 @@ local Workspace = game:GetService("Workspace")
 local HttpService = game:GetService("HttpService")
 local VirtualInputManager = (function()
     local ok, vim = pcall(function() return Instance.new("VirtualInputManager") end)
-    if ok then return vim end
+    if ok then print("[AutoFarm] ✅ Using instanced VirtualInputManager") return vim end
     local ok2, vim2 = pcall(function() return game:GetService("VirtualInputManager") end)
-    if ok2 then return vim2 end
+    if ok2 then print("[AutoFarm] ✅ Using service VirtualInputManager") return vim2 end
+    warn("[AutoFarm] ⚠️ VirtualInputManager unavailable!")
     return nil
 end)()
 
