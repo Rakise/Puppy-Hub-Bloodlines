@@ -7,6 +7,7 @@ local RunService = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
 local Workspace = game:GetService("Workspace")
 local HttpService = game:GetService("HttpService")
+local GuiService = game:GetService("GuiService")
 
 local VirtualInputManager = (function()
     local ok, vim = pcall(function() return Instance.new("VirtualInputManager") end)
@@ -16,6 +17,55 @@ local VirtualInputManager = (function()
     warn("[PuppyHub] ⚠️ VirtualInputManager unavailable!")
     return nil
 end)()
+
+-- ============================================================================
+-- VIRTUAL MOUSE SYSTEM
+-- Uses VIM + GuiInset to properly simulate mouse input at GUI element positions.
+-- GuiInset is the TopBar offset that shifts all AbsolutePosition values.
+-- ============================================================================
+local VirtualMouse = {}
+
+function VirtualMouse.applyInset(x, y)
+    local inset = GuiService:GetGuiInset()
+    return x + inset.X, y + inset.Y
+end
+
+function VirtualMouse.move(x, y)
+    if not VirtualInputManager then return false end
+    local rx, ry = VirtualMouse.applyInset(x, y)
+    VirtualInputManager:SendMouseMoveEvent(rx, ry, game)
+    return true
+end
+
+function VirtualMouse.click(x, y, button)
+    if not VirtualInputManager then return false end
+    button = button or 0 -- 0 = left, 1 = right
+    local rx, ry = VirtualMouse.applyInset(x, y)
+    VirtualInputManager:SendMouseButtonEvent(rx, ry, button, true, game, 0)
+    task.wait()
+    VirtualInputManager:SendMouseButtonEvent(rx, ry, button, false, game, 0)
+    return true
+end
+
+-- Move to position + click (full sequence for GUI buttons)
+function VirtualMouse.clickAt(x, y, button)
+    if not VirtualInputManager then return false end
+    VirtualMouse.move(x, y)
+    task.wait(0.15)
+    VirtualMouse.click(x, y, button)
+    return true
+end
+
+-- Click at the center of a GUI element
+function VirtualMouse.clickGui(guiObject, button)
+    if not VirtualInputManager or not guiObject then return false end
+    local pos = guiObject.AbsolutePosition
+    local size = guiObject.AbsoluteSize
+    local centerX = pos.X + size.X / 2
+    local centerY = pos.Y + size.Y / 2
+    print("[VirtualMouse] Clicking GUI at (" .. math.floor(centerX) .. ", " .. math.floor(centerY) .. ")")
+    return VirtualMouse.clickAt(centerX, centerY, button)
+end
 
 local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
@@ -451,29 +501,8 @@ local function AutoLoginRoutine()
                 task.wait(1)
                 print("[PuppyHub] Found Continue button, attempting click...")
                 
-                -- Get the center of the button on screen
-                local pos = continueBtn.AbsolutePosition
-                local size = continueBtn.AbsoluteSize
-                local centerX = pos.X + size.X / 2
-                local centerY = pos.Y + size.Y / 2
-                
-                -- Primary: VirtualInputManager (moves cursor + clicks at button position)
-                -- The game checks Player:GetMouse() position via UIS/CAS, so we MUST
-                -- move the virtual cursor to the button first, then click
-                if VirtualInputManager then
-                    print("[PuppyHub] Using VirtualInputManager at (" .. math.floor(centerX) .. ", " .. math.floor(centerY) .. ")")
-                    
-                    -- Step 1: Move cursor to button center (updates internal mouse position)
-                    VirtualInputManager:SendMouseMoveEvent(centerX, centerY, game)
-                    task.wait(0.15)
-                    
-                    -- Step 2: Mouse down at button position
-                    VirtualInputManager:SendMouseButtonEvent(centerX, centerY, 0, true, game, 0)
-                    task.wait(0.08)
-                    
-                    -- Step 3: Mouse up at button position
-                    VirtualInputManager:SendMouseButtonEvent(centerX, centerY, 0, false, game, 0)
-                    
+                -- Virtual click with proper GuiInset handling
+                if VirtualMouse.clickGui(continueBtn) then
                     print("[PuppyHub] Continue clicked!")
                 else
                     -- Fallback: Physical mouse (needs window focused)

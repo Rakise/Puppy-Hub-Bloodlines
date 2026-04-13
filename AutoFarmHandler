@@ -8,6 +8,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
 local HttpService = game:GetService("HttpService")
+local GuiService = game:GetService("GuiService")
 local VirtualInputManager = (function()
     local ok, vim = pcall(function() return Instance.new("VirtualInputManager") end)
     if ok then print("[AutoFarm] ✅ Using instanced VirtualInputManager") return vim end
@@ -16,6 +17,42 @@ local VirtualInputManager = (function()
     warn("[AutoFarm] ⚠️ VirtualInputManager unavailable!")
     return nil
 end)()
+
+-- ============================================================================
+-- VIRTUAL MOUSE SYSTEM (shared with CoreManager pattern)
+-- Uses VIM + GuiInset to properly simulate mouse input.
+-- ============================================================================
+local VirtualMouse = {}
+
+function VirtualMouse.applyInset(x, y)
+    local inset = GuiService:GetGuiInset()
+    return x + inset.X, y + inset.Y
+end
+
+function VirtualMouse.move(x, y)
+    if not VirtualInputManager then return false end
+    local rx, ry = VirtualMouse.applyInset(x, y)
+    VirtualInputManager:SendMouseMoveEvent(rx, ry, game)
+    return true
+end
+
+function VirtualMouse.click(x, y, button)
+    if not VirtualInputManager then return false end
+    button = button or 0
+    local rx, ry = VirtualMouse.applyInset(x, y)
+    VirtualInputManager:SendMouseButtonEvent(rx, ry, button, true, game, 0)
+    task.wait()
+    VirtualInputManager:SendMouseButtonEvent(rx, ry, button, false, game, 0)
+    return true
+end
+
+function VirtualMouse.clickAt(x, y, button)
+    if not VirtualInputManager then return false end
+    VirtualMouse.move(x, y)
+    task.wait(0.15)
+    VirtualMouse.click(x, y, button)
+    return true
+end
 
 local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
@@ -461,20 +498,14 @@ end
 
 local function clickEquippedTool()
     pcall(function()
-        local x, y = 400, 400 -- Screen center (tool activation doesn't need precise position)
+        local x, y = 400, 400
         
         if VirtualInputManager then
-            -- Right Click (Mastered Version)
-            VirtualInputManager:SendMouseButtonEvent(x, y, 1, true, game, 0)
-            task.wait(0.05)
-            VirtualInputManager:SendMouseButtonEvent(x, y, 1, false, game, 0)
-            
+            -- Right Click (Mastered Version) with inset
+            VirtualMouse.click(x, y, 1)
             task.wait(0.1)
-            
-            -- Left Click (Standard Version)
-            VirtualInputManager:SendMouseButtonEvent(x, y, 0, true, game, 0)
-            task.wait(0.05)
-            VirtualInputManager:SendMouseButtonEvent(x, y, 0, false, game, 0)
+            -- Left Click (Standard Version) with inset
+            VirtualMouse.click(x, y, 0)
         else
             -- Fallback: physical mouse clicks
             if mouse2click then mouse2click() end
@@ -590,36 +621,42 @@ local function stopTracking()
 end
 
 -- ============================================================================
--- FRUIT PICKUP METHODS (Priority: firesignal > fireclickdetector > virtual click > physical)
--- The game uses a custom ClickDetector with hover-based validation:
---   HoverEnter sets Holding[plr] = true
---   HoverLeave sets Holding[plr] = false (after task.wait())
---   MouseClick only fires callback if NOT Holding (i.e. after hover leave completes)
--- So we must simulate: HoverEnter → HoverLeave → wait → MouseClick
+-- FRUIT PICKUP METHODS (Priority: VIM > firesignal > fireclickdetector > physical)
 -- ============================================================================
 
--- Method 1: firesignal with full hover sequence (best — fully virtual, no mouse needed)
+-- Method 1: VirtualMouse move + click at fruit screen position (fully virtual)
+local function tryVIMPickup(itemPos)
+    if not VirtualInputManager then return false end
+    local camera = Workspace.CurrentCamera
+    if not camera then return false end
+    
+    local screenPos, onScreen = camera:WorldToScreenPoint(itemPos)
+    if not onScreen then return false end
+    
+    -- Move cursor to fruit, then right-click (mastered) + left-click (standard)
+    VirtualMouse.move(screenPos.X, screenPos.Y)
+    task.wait(0.1)
+    VirtualMouse.click(screenPos.X, screenPos.Y, 1) -- right-click
+    task.wait(0.05)
+    VirtualMouse.click(screenPos.X, screenPos.Y, 0) -- left-click
+    return true
+end
+
+-- Method 2: firesignal with full hover sequence
 local function tryFireSignalPickup(clickDetector)
     if not firesignal then return false end
     
     local ok = pcall(function()
-        -- Step 1: Simulate hover enter (sets Holding = true)
         firesignal(clickDetector.MouseHoverEnter, LocalPlayer)
-        
-        -- Step 2: Simulate hover leave (triggers task.wait() then Holding = false)
         firesignal(clickDetector.MouseHoverLeave, LocalPlayer)
-        
-        -- Step 3: Wait for the server-side task.wait() in HoverLeave to flush
         task.wait(0.15)
-        
-        -- Step 4: Fire the click — Holding is now false, so CallBack fires
         firesignal(clickDetector.MouseClick, LocalPlayer)
     end)
     
     return ok
 end
 
--- Method 2: fireclickdetector (simple but may not bypass hover check)
+-- Method 3: fireclickdetector
 local function tryFireClickDetector(clickDetector)
     if not fireclickdetector then return false end
     
@@ -630,7 +667,7 @@ local function tryFireClickDetector(clickDetector)
     return ok
 end
 
--- Method 3: Physical mouse fallback (last resort, needs window focused)
+-- Method 4: Physical mouse fallback (last resort, needs window focused)
 local function tryPhysicalClick(itemPos)
     if not (mouse1click and mousemoverel) then return false end
     local camera = Workspace.CurrentCamera
@@ -648,21 +685,25 @@ end
 
 -- Master pickup function: tries each method in priority order
 local function pickupFruit(item)
-    local detector = item:FindFirstChild("ItemDetector")
+    -- Priority 1: VirtualMouse with inset (fully virtual, works in background)
+    if tryVIMPickup(item.Position) then
+        return true, "VIM"
+    end
     
-    -- Priority 1: firesignal with hover sequence (fully virtual, bypasses hover anti-cheat)
+    local detector = item:FindFirstChild("ItemDetector")
     if detector and detector:IsA("ClickDetector") then
+        -- Priority 2: firesignal with hover sequence
         if tryFireSignalPickup(detector) then
             return true, "firesignal"
         end
         
-        -- Priority 2: fireclickdetector
+        -- Priority 3: fireclickdetector
         if tryFireClickDetector(detector) then
             return true, "fireclickdetector"
         end
     end
     
-    -- Priority 3: Physical mouse (needs window focused)
+    -- Priority 4: Physical mouse (needs window focused)
     if tryPhysicalClick(item.Position) then
         return true, "physical"
     end
