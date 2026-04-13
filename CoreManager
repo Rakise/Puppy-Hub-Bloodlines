@@ -583,9 +583,29 @@ end
 
 local Window = Library:CreateWindow({
     Title = '[Puppy Hub] Bloodlines 🩸',
-    Center = true, AutoShow = true, TabPadding = 8, MenuFadeTime = 0.2,
+    Center = not needsAutoLogin, -- Center on first launch, bottom-right on server hop
+    AutoShow = true, TabPadding = 8, MenuFadeTime = 0.2,
     Size = UDim2.fromOffset(700, 600)
 })
+
+-- On server hop: move UI to bottom-right corner so it doesn't block the view
+if needsAutoLogin then
+    task.defer(function()
+        pcall(function()
+            local screenSize = Workspace.CurrentCamera.ViewportSize
+            local windowSize = Vector2.new(700, 600)
+            local padding = 10
+            local targetPos = UDim2.fromOffset(
+                screenSize.X - windowSize.X - padding,
+                screenSize.Y - windowSize.Y - padding
+            )
+            -- Linoria stores the main frame in Library.Main
+            if Library.Main then
+                Library.Main.Position = targetPos
+            end
+        end)
+    end)
+end
 
 local Tabs = {
     Visuals = Window:AddTab('Visuals'),
