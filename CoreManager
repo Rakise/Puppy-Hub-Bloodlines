@@ -8,6 +8,14 @@ local TweenService = game:GetService("TweenService")
 local Workspace = game:GetService("Workspace")
 local HttpService = game:GetService("HttpService")
 
+local VirtualInputManager = (function()
+    local ok, vim = pcall(function() return Instance.new("VirtualInputManager") end)
+    if ok then return vim end
+    local ok2, vim2 = pcall(function() return game:GetService("VirtualInputManager") end)
+    if ok2 then return vim2 end
+    return nil
+end)()
+
 local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 
