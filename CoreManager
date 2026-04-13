@@ -603,15 +603,28 @@ if BossFarm then
     BossFarm.Settings.WebhookURL = Config.BossWebhookURL or ""
 end
 
--- Auto-login if we have anything to resume (summon OR boss farm)
--- Check if any feature needs auto-login (farming OR visuals)
-local needsAutoLogin = Config.AutoSummon or Config.BossFarmEnabled or Config.BossLoopEnabled
-    or Config.PlayerESP or Config.ObserveUI or Config.ChatLogs
-    or Config.MobESP or Config.NpcESP
-    or Config.TrinketESP or Config.FruitESP or Config.GemESP
-    or Config.ChakraESP or Config.CorruptedESP
-    or Config.TransTrail or Config.NoFog
-if needsAutoLogin then
+-- Auto-login ONLY when farming features are active (= server hop from autofarm/autoboss)
+-- Visual settings are saved/loaded but NOT auto-enabled on fresh join
+local isFarmRedirect = Config.AutoSummon or Config.BossFarmEnabled or Config.BossLoopEnabled
+
+-- If NOT a farm redirect, clear visual toggles so they don't auto-enable on fresh join
+if not isFarmRedirect then
+    Config.PlayerESP = false
+    Config.ObserveUI = false
+    Config.ChatLogs = false
+    Config.MobESP = false
+    Config.NpcESP = false
+    Config.TrinketESP = false
+    Config.FruitESP = false
+    Config.GemESP = false
+    Config.ChakraESP = false
+    Config.CorruptedESP = false
+    Config.TransTrail = false
+    Config.NoFog = false
+    print("[PuppyHub] Fresh join — visual toggles reset.")
+end
+
+if isFarmRedirect then
     task.spawn(AutoLoginRoutine)
 end
 
@@ -621,13 +634,13 @@ end
 
 local Window = Library:CreateWindow({
     Title = '[Puppy Hub] Bloodlines 🩸',
-    Center = not needsAutoLogin, -- Center on first launch, bottom-right on server hop
+    Center = not isFarmRedirect, -- Center on fresh join, bottom-right on farm redirect
     AutoShow = true, TabPadding = 8, MenuFadeTime = 0.2,
     Size = UDim2.fromOffset(700, 600)
 })
 
--- On server hop: move UI to bottom-right corner so it doesn't block the view
-if needsAutoLogin then
+-- On farm redirect: move UI to bottom-right corner so it doesn't block the view
+if isFarmRedirect then
     task.defer(function()
         pcall(function()
             local screenSize = Workspace.CurrentCamera.ViewportSize
