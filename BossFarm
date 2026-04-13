@@ -44,6 +44,8 @@ BossFarm.Settings = {
     -- Advanced Boss Loop
     BossLoopEnabled = false,
     HopAfterLoop = false,
+    -- Webhook
+    WebhookURL = "",
 }
 
 -- ============================================
@@ -369,6 +371,40 @@ function Weapons.equip(weaponName)
 end
 
 -- ============================================
+-- DISCORD WEBHOOK
+-- ============================================
+local Webhook = {}
+
+function Webhook.send(title, description, color)
+    local url = BossFarm.Settings.WebhookURL
+    if not url or url == "" then return end
+    
+    pcall(function()
+        local requestFunc = (syn and syn.request) or (http and http.request) or http_request or (fluxus and fluxus.request) or request
+        if not requestFunc then return end
+        
+        local payload = HttpService:JSONEncode({
+            embeds = {{
+                title = title,
+                description = description,
+                color = color or 3447003,
+                footer = {
+                    text = "Puppy Hub | " .. LocalPlayer.Name .. " | Server: " .. string.sub(game.JobId, 1, 8)
+                },
+                timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ")
+            }}
+        })
+        
+        requestFunc({
+            Url = url,
+            Method = "POST",
+            Headers = {["Content-Type"] = "application/json"},
+            Body = payload
+        })
+    end)
+end
+
+-- ============================================
 -- PLAYER SAFETY (Horizontal + Vertical Tolerance)
 -- ============================================
 local Safety = {}
@@ -446,6 +482,7 @@ end
 function Safety.evacuateAndHop(reason)
     Utils.log("Evacuating: " .. tostring(reason))
     Utils.notify("Evacuating: " .. tostring(reason), 5)
+    Webhook.send("⚠️ Evacuating & Hopping", reason, 15158332)
     
     local pd = Utils.getPlayerData()
     if pd then
@@ -510,6 +547,7 @@ function Safety.evacuateAndHide(reason)
     
     task.spawn(function()
         local safeTimer = 0
+        local dangerTimer = 0
         while BossFarm.Settings.Enabled do
             local pData = Utils.getPlayerData()
             if pData then
@@ -520,10 +558,16 @@ function Safety.evacuateAndHide(reason)
                 pcall(function() pData.humanoid:MoveTo(targetPos) end)
             end
             
-            local senseActive = Safety.isChakraSenseActive()
+            local senseActive, sensePlayer = Safety.isChakraSenseActive()
             if senseActive then
                 safeTimer = 0
+                dangerTimer = dangerTimer + 2
+                if dangerTimer >= 15 then
+                    Safety.evacuateAndHop("Chakra Sense > 15s (" .. (sensePlayer or "Unknown") .. ")")
+                    return
+                end
             else
+                dangerTimer = 0
                 safeTimer = safeTimer + 1
                 if safeTimer >= 10 then
                     break
@@ -889,6 +933,41 @@ end
 -- ============================================
 local Loot = {}
 
+function Loot.scanLootItems(lootSpot)
+    local items = {}
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        if (obj:IsA("Model") or obj:IsA("BasePart")) and TrinketSet[obj.Name] then
+            local pos = nil
+            if obj:IsA("BasePart") then
+                pos = obj.Position
+            elseif obj:IsA("Model") then
+                local pp = obj.PrimaryPart or obj:FindFirstChildWhichIsA("BasePart")
+                if pp then pos = pp.Position end
+            end
+            
+            if pos and (lootSpot - pos).Magnitude <= 200 then
+                local idVal = obj:FindFirstChild("ID")
+                if not idVal then
+                    for _, d in ipairs(obj:GetDescendants()) do
+                        if d.Name == "ID" and d:IsA("NumberValue") then
+                            idVal = d
+                            break
+                        end
+                    end
+                end
+                if idVal then
+                    table.insert(items, {
+                        obj = obj, pos = pos, id = idVal.Value,
+                        name = obj.Name,
+                        dist = (lootSpot - pos).Magnitude
+                    })
+                end
+            end
+        end
+    end
+    return items
+end
+
 function Loot.collectNearBoss(bossName, config)
     local lootSpot = config.lootSpot
     if not lootSpot then return end
@@ -896,16 +975,15 @@ function Loot.collectNearBoss(bossName, config)
     local pData = Utils.getPlayerData()
     if not pData then return end
     
-    Utils.log("Waiting for loot to spawn for " .. bossName)
-    Utils.notify("Waiting 12s for Boss Loot...", 3)
-    
-    local items = {}
     local dataEvent = GetDataEvent()
     if not dataEvent then return end
     
-    -- Wait up to 12 seconds for at least one item to appear
+    -- Phase 1: Stay at loot spot for the full 15 seconds, holding position
+    Utils.log("Waiting 15s for loot to spawn for " .. bossName)
+    Utils.notify("Waiting 15s for Boss Loot...", 5)
+    
     local startWait = tick()
-    while tick() - startWait < 12 do
+    while tick() - startWait < 15 do
         pData = Utils.getPlayerData()
         if pData then pData.rootPart.CFrame = CFrame.new(lootSpot) end
         
@@ -929,51 +1007,22 @@ function Loot.collectNearBoss(bossName, config)
             return
         end
         
-        items = {}
-        for _, obj in ipairs(workspace:GetDescendants()) do
-            if (obj:IsA("Model") or obj:IsA("BasePart")) and TrinketSet[obj.Name] then
-                local pos = nil
-                if obj:IsA("BasePart") then
-                    pos = obj.Position
-                elseif obj:IsA("Model") then
-                    local pp = obj.PrimaryPart or obj:FindFirstChildWhichIsA("BasePart")
-                    if pp then pos = pp.Position end
-                end
-                
-                if pos and (lootSpot - pos).Magnitude <= 200 then
-                    local idVal = obj:FindFirstChild("ID")
-                    if not idVal then
-                        for _, d in ipairs(obj:GetDescendants()) do
-                            if d.Name == "ID" and d:IsA("NumberValue") then
-                                idVal = d
-                                break
-                            end
-                        end
-                    end
-                    if idVal then
-                        table.insert(items, {
-                            obj = obj, pos = pos, id = idVal.Value,
-                            dist = (lootSpot - pos).Magnitude
-                        })
-                    end
-                end
-            end
-        end
-        
-        -- If items spawned, and we've waited at least 5s total (so multiple drops can spawn)
-        if #items > 0 and (tick() - startWait > 5) then
-            break 
-        end
-        task.wait(1)
+        task.wait()
     end
     
+    -- Phase 2: Scan for all items AFTER the full 15s wait
+    local items = Loot.scanLootItems(lootSpot)
+    
     if #items == 0 then
-        Utils.notify("No boss loot found after 12s.", 2)
+        Utils.notify("No boss loot found after 15s.", 2)
+        Webhook.send("📦 No Loot", bossName .. " - No loot found after 15s wait.", 9807270)
         return
     end
     
+    -- Phase 3: Pick up all items one-by-one
     table.sort(items, function(a, b) return a.dist < b.dist end)
     
+    local collectedNames = {}
     for _, entry in ipairs(items) do
         if not entry.obj.Parent then continue end
         pData = Utils.getPlayerData()
@@ -982,7 +1031,7 @@ function Loot.collectNearBoss(bossName, config)
         pData.rootPart.CFrame = CFrame.new(entry.pos + Vector3.new(0, 3, 0))
         task.wait(0.3) -- settle
         
-        local spamEnd = tick() + 0.5 -- Increased timeout to bypass game's pickup debounce
+        local spamEnd = tick() + 0.8
         while tick() < spamEnd do
             if not entry.obj.Parent then break end -- Item is gone, picked up successfully!
             
@@ -1009,10 +1058,39 @@ function Loot.collectNearBoss(bossName, config)
             pcall(function() dataEvent:FireServer("PickUp", entry.id) end)
             task.wait(0.1)
         end
+        
+        if not entry.obj.Parent then
+            table.insert(collectedNames, entry.name)
+        end
         task.wait(0.2)
     end
     
-    Utils.notify("Boss loot collected!", 2)
+    -- Phase 4: Do a second sweep in case items spawned late
+    local extraItems = Loot.scanLootItems(lootSpot)
+    for _, entry in ipairs(extraItems) do
+        if not entry.obj.Parent then continue end
+        pData = Utils.getPlayerData()
+        if not pData then break end
+        
+        pData.rootPart.CFrame = CFrame.new(entry.pos + Vector3.new(0, 3, 0))
+        task.wait(0.3)
+        
+        local spamEnd = tick() + 0.8
+        while tick() < spamEnd do
+            if not entry.obj.Parent then break end
+            pcall(function() dataEvent:FireServer("PickUp", entry.id) end)
+            task.wait(0.1)
+        end
+        
+        if not entry.obj.Parent then
+            table.insert(collectedNames, entry.name)
+        end
+        task.wait(0.2)
+    end
+    
+    local lootSummary = #collectedNames > 0 and table.concat(collectedNames, ", ") or "None"
+    Utils.notify("Boss loot collected! (" .. #collectedNames .. " items)", 3)
+    Webhook.send("💰 Loot Collected", "**Boss:** " .. bossName .. "\n**Items (" .. #collectedNames .. "):** " .. lootSummary, 5763719)
 end
 
 -- ============================================
@@ -1162,6 +1240,7 @@ function ServerHop.execute(keepTrying)
                     local target = candidates[math.random(1, #candidates)]
                     Utils.log("Joining server: " .. target.id)
                     Utils.notify("Joining server...", 3)
+                    Webhook.send("🔄 Server Hop", "Hopping to server: `" .. target.id .. "` (" .. target.playing .. " players)", 3447003)
                     ServerHop.join(target.id)
                 else
                     Utils.log("No suitable servers found.")
@@ -1231,8 +1310,9 @@ function Farm.farmBoss(hum, model, bossName)
         -- Check if boss is still valid
         if not hum or not hum.Parent or hum.Health <= 0 then
             Farm.stopCurrent()
+            Webhook.send("💀 Boss Killed", "**" .. bossName .. "** has been defeated!", 3066993)
             if BossFarm.Settings.AutoLootOnKill and config.lootSpot then
-                pcall(Loot.collectNearBoss, bossName, config)
+                Loot.collectNearBoss(bossName, config)
             end
             break
         end
@@ -1417,10 +1497,11 @@ function BossLoop.start()
                     return
                 end
                 
-                -- Farm this boss
+                -- Farm this boss (farmBoss handles loot collection internally before returning)
                 Farm.farmBoss(hum, model, bossName)
                 
-                task.wait(1)
+                -- Give a moment before moving to next boss
+                task.wait(2)
             end
             
             -- Full loop complete

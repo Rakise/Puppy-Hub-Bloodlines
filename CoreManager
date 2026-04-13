@@ -204,6 +204,7 @@ local Config = {
     BossServerHopIfChakraSense = false,
     BossHopAfterLoop = false,
     BossAutoLootOnKill = false,
+    BossWebhookURL = "",
 }
 
 local function SaveConfig()
@@ -234,6 +235,7 @@ local function LoadConfig()
             if decoded.BossServerHopIfChakraSense ~= nil then Config.BossServerHopIfChakraSense = decoded.BossServerHopIfChakraSense end
             if decoded.BossHopAfterLoop ~= nil then Config.BossHopAfterLoop = decoded.BossHopAfterLoop end
             if decoded.BossAutoLootOnKill ~= nil then Config.BossAutoLootOnKill = decoded.BossAutoLootOnKill end
+            if decoded.BossWebhookURL ~= nil then Config.BossWebhookURL = decoded.BossWebhookURL end
 
         end
     end
@@ -451,6 +453,7 @@ local function AutoLoginRoutine()
         BossFarm.Settings.ServerHopIfChakraSense = Config.BossServerHopIfChakraSense
         BossFarm.Settings.HopAfterLoop = Config.BossHopAfterLoop
         BossFarm.Settings.AutoLootOnKill = Config.BossAutoLootOnKill
+        BossFarm.Settings.WebhookURL = Config.BossWebhookURL or ""
         
         task.wait(2) -- Let game fully load
         
@@ -476,6 +479,7 @@ if BossFarm then
     BossFarm.Settings.HopAfterLoop = Config.BossHopAfterLoop
     BossFarm.Settings.AutoLootOnKill = Config.BossAutoLootOnKill
     BossFarm.Settings.SelectedBosses = Config.BossSelectedBosses or {}
+    BossFarm.Settings.WebhookURL = Config.BossWebhookURL or ""
 end
 
 -- Auto-login if we have anything to resume (summon OR boss farm)
@@ -856,6 +860,21 @@ if BossFarm and AutoFarmHandler then
     })
 
     FarmRight:AddDivider()
+    FarmRight:AddLabel('Discord Webhook')
+    
+    FarmRight:AddInput('WebhookInput', {
+        Default = Config.BossWebhookURL or '',
+        Numeric = false,
+        Finished = true,
+        Text = 'Webhook URL',
+        Tooltip = 'Paste your Discord webhook URL here for loot/kill/hop notifications.',
+        Placeholder = 'https://discord.com/api/webhooks/...',
+        Callback = function(val)
+            Config.BossWebhookURL = val
+            BossFarm.Settings.WebhookURL = val
+            SaveConfig()
+        end
+    })
     
     local WeaponLabel = FarmRight:AddLabel("Weapon: (starts on farm)")
     -- Update weapon label when farm starts
