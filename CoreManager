@@ -443,7 +443,7 @@ local function AutoLoginRoutine()
                 
                 local clicked = false
                 task.wait(0.1)
-                firesignal(continueBtn.HoverEnter)
+                firesignal(continueBtn.MouseEnter)
                 task.wait(0.1)
                 firesignal(continueBtn.MouseButton1Down)
                 task.wait(0.1)
@@ -455,7 +455,7 @@ local function AutoLoginRoutine()
                 task.wait(0.1)
                 firesignal(continueBtn.InputBegan, {UserInputType = Enum.UserInputType.MouseButton1, UserInputState = Enum.UserInputState.Begin})
                 task.wait(0.1)
-                firesignal(continueBtn.HoverLeave)
+                firesignal(continueBtn.MouseLeave)
                 task.wait(0.1)
                 -- Method 1: Built-in Activate() (simplest, no external tools)
                 if not clicked then
