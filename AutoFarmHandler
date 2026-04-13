@@ -581,24 +581,85 @@ local function stopTracking()
     State.PickupCache = {}
 end
 
--- Click at exact screen coordinates using VirtualInputManager (no physical mouse needed)
-local function virtualClickAt(x, y)
-    if VirtualInputManager then
-        VirtualInputManager:SendMouseButtonEvent(x, y, 0, true, game, 0)
-        task.wait(0.05)
-        VirtualInputManager:SendMouseButtonEvent(x, y, 0, false, game, 0)
-        return true
-    elseif mouse1click and mousemoverel then
-        -- Fallback: physical mouse
-        local mouse = LocalPlayer:GetMouse()
-        local dx = x - mouse.X
-        local dy = y - mouse.Y
-        mousemoverel(dx, dy)
-        task.wait(0.05)
-        mouse1click()
-        return true
+-- ============================================================================
+-- FRUIT PICKUP METHODS (Priority: firesignal > fireclickdetector > virtual click > physical)
+-- The game uses a custom ClickDetector with hover-based validation:
+--   HoverEnter sets Holding[plr] = true
+--   HoverLeave sets Holding[plr] = false (after task.wait())
+--   MouseClick only fires callback if NOT Holding (i.e. after hover leave completes)
+-- So we must simulate: HoverEnter → HoverLeave → wait → MouseClick
+-- ============================================================================
+
+-- Method 1: firesignal with full hover sequence (best — fully virtual, no mouse needed)
+local function tryFireSignalPickup(clickDetector)
+    if not firesignal then return false end
+    
+    local ok = pcall(function()
+        -- Step 1: Simulate hover enter (sets Holding = true)
+        firesignal(clickDetector.MouseHoverEnter, LocalPlayer)
+        
+        -- Step 2: Simulate hover leave (triggers task.wait() then Holding = false)
+        firesignal(clickDetector.MouseHoverLeave, LocalPlayer)
+        
+        -- Step 3: Wait for the server-side task.wait() in HoverLeave to flush
+        task.wait(0.15)
+        
+        -- Step 4: Fire the click — Holding is now false, so CallBack fires
+        firesignal(clickDetector.MouseClick, LocalPlayer)
+    end)
+    
+    return ok
+end
+
+-- Method 2: fireclickdetector (simple but may not bypass hover check)
+local function tryFireClickDetector(clickDetector)
+    if not fireclickdetector then return false end
+    
+    local ok = pcall(function()
+        fireclickdetector(clickDetector)
+    end)
+    
+    return ok
+end
+
+-- Method 3: Physical mouse fallback (last resort, needs window focused)
+local function tryPhysicalClick(itemPos)
+    if not (mouse1click and mousemoverel) then return false end
+    local camera = Workspace.CurrentCamera
+    if not camera then return false end
+    
+    local screenPos, onScreen = camera:WorldToScreenPoint(itemPos)
+    if not onScreen then return false end
+    
+    local mouse = LocalPlayer:GetMouse()
+    mousemoverel(screenPos.X - mouse.X, screenPos.Y - mouse.Y)
+    task.wait(0.05)
+    mouse1click()
+    return true
+end
+
+-- Master pickup function: tries each method in priority order
+local function pickupFruit(item)
+    local detector = item:FindFirstChild("ItemDetector")
+    
+    -- Priority 1: firesignal with hover sequence (fully virtual, bypasses hover anti-cheat)
+    if detector and detector:IsA("ClickDetector") then
+        if tryFireSignalPickup(detector) then
+            return true, "firesignal"
+        end
+        
+        -- Priority 2: fireclickdetector
+        if tryFireClickDetector(detector) then
+            return true, "fireclickdetector"
+        end
     end
-    return false
+    
+    -- Priority 3: Physical mouse (needs window focused)
+    if tryPhysicalClick(item.Position) then
+        return true, "physical"
+    end
+    
+    return false, "none"
 end
 
 local function doPickup()
@@ -607,8 +668,6 @@ local function doPickup()
     local root = character and character:FindFirstChild("HumanoidRootPart")
     if not root then return end
     local range = AutoFarmHandler.Settings.PickupRange
-    local camera = Workspace.CurrentCamera
-    if not camera then return end
     
     -- Snapshot keys first to avoid "invalid key to next" during yields
     local items = {}
@@ -624,17 +683,11 @@ local function doPickup()
             local itemPos = item.Position -- We know it's a BasePart
             
             if itemPos and (root.Position - itemPos).Magnitude <= range then
-                -- Convert world position to screen position
-                local screenPos, onScreen = camera:WorldToScreenPoint(itemPos)
-                
-                if onScreen then
-                    -- Instant virtual click at the fruit's screen position (no mouse movement)
-                    local clicked = virtualClickAt(screenPos.X, screenPos.Y)
-                    if clicked then
-                        print("[AutoFarm] ✅ Picked up fruit: " .. item.Name)
-                    end
+                local picked, method = pickupFruit(item)
+                if picked then
+                    print("[AutoFarm] ✅ Picked up fruit: " .. item.Name .. " (via " .. method .. ")")
                 else
-                    print("[AutoFarm] ⏭️ Fruit off-screen, skipping: " .. item.Name)
+                    print("[AutoFarm] ⚠️ All pickup methods failed for: " .. item.Name)
                 end
                 
                 task.wait(AutoFarmHandler.Settings.PickupDelay)
