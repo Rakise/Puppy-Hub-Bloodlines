@@ -243,6 +243,114 @@ end
 -- AUTO LOGIN & FORCEFIELD LOGIC
 -- ============================================================================
 
+local currentMouseTask = nil
+local VirtualInputManager = game:GetService("VirtualInputManager")
+local mouse = LocalPlayer:GetMouse()
+
+local function moveMouseToGui(guiObject)
+    local thisTask = coroutine.running()
+
+    if currentMouseTask and coroutine.status(currentMouseTask) == "running" then
+        print("[Mouse] Cancelling previous mouse task.")
+        task.cancel(currentMouseTask)
+    end
+    currentMouseTask = thisTask
+
+    pcall(function()
+        local step = 40
+        task.wait(0.1) 
+        if State.IsPanicMode then return end 
+
+        local targetX, targetY
+        if typeof(guiObject) == "Vector2" then
+            targetX = guiObject.X
+            targetY = guiObject.Y
+        else
+            if not (guiObject and guiObject.AbsolutePosition and guiObject.AbsoluteSize) then
+                 print("[Mouse] Invalid GUIObject passed to moveMouseToGui")
+                 return
+            end
+            local pos = guiObject.AbsolutePosition
+            local size = guiObject.AbsoluteSize
+            targetX = pos.X + size.X / 2
+            targetY = pos.Y + size.Y / 2
+        end
+        
+        while math.abs(mouse.X - targetX) > 1 or math.abs(mouse.Y - targetY) > 1 do
+            if State.IsPanicMode then
+                print("[Mouse] Panic mode activated, stopping mouse task.")
+                break
+            end
+            if typeof(guiObject) ~= "Vector2" and not (guiObject and guiObject.Parent) then
+                print("[Mouse] GUIObject disappeared, stopping move.")
+                break
+            end
+            local dx = math.clamp(targetX - mouse.X, -step, step)
+            local dy = math.clamp(targetY - mouse.Y, -step, step)
+            if mousemoverel then mousemoverel(dx, dy) end
+            task.wait(0.01)
+        end
+        
+        if not State.IsPanicMode then
+            if typeof(guiObject) ~= "Vector2" and not (guiObject and guiObject.Parent) then return end
+            local tX, tY
+            if typeof(guiObject) == "Vector2" then
+                tX = guiObject.X
+                tY = guiObject.Y
+            else
+                if not (guiObject and guiObject.AbsolutePosition and guiObject.AbsoluteSize) then return end
+                local pos = guiObject.AbsolutePosition
+                local size = guiObject.AbsoluteSize
+                tX = pos.X + size.X / 2
+                tY = pos.Y + size.Y / 2
+            end
+
+            local finalDX = tX - mouse.X
+            local finalDY = tY - mouse.Y
+            if (finalDX ~= 0 or finalDY ~= 0) and mousemoverel then 
+                mousemoverel(finalDX, finalDY) 
+            end
+        end
+    end)
+    if currentMouseTask == thisTask then currentMouseTask = nil end
+end
+
+local function clickMouse()
+    if mouse1press and mouse1release then
+        mouse1press()
+        task.wait(0.05)
+        mouse1release()
+    elseif VirtualInputManager then
+        VirtualInputManager:SendMouseButtonEvent(mouse.X, mouse.Y, 0, true, game, 0)
+        task.wait(0.05)
+        VirtualInputManager:SendMouseButtonEvent(mouse.X, mouse.Y, 0, false, game, 0)
+    end
+end
+
+local function tweenForcefieldCFrameSync(root, targetCFrame, duration)
+    local startTime = tick()
+    local startCFrame = root.CFrame
+    while (tick() - startTime) < duration do
+        if AutoFarmHandler and AutoFarmHandler.checkSafety then
+            local safe, reason = AutoFarmHandler.checkSafety()
+            if not safe then
+                if Config.ServerHopOnDanger and AutoFarmHandler.executeServerHop then
+                    print("[PuppyHub] ⚠️ Unsafe during forcefield tween: " .. tostring(reason) .. ". Hopping...")
+                    AutoFarmHandler.executeServerHop()
+                    return false
+                else
+                    print("[PuppyHub] ⚠️ Unsafe: " .. tostring(reason) .. " but hopping is disabled.")
+                end
+            end
+        end
+        local alpha = TweenService:GetValue((tick() - startTime) / duration, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+        root.CFrame = startCFrame:Lerp(targetCFrame, alpha)
+        task.wait()
+    end
+    root.CFrame = targetCFrame
+    return true
+end
+
 local function RemoveForcefield()
     print("[PuppyHub] Removing Forcefield Sequence Initiated...")
     
@@ -257,17 +365,22 @@ local function RemoveForcefield()
     if root then
         local forwardPos = root.CFrame * CFrame.new(0, 0, -40)
         local originalPos = root.CFrame
-        local tweenInfo = TweenInfo.new(0.5, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
-
-        local tweenForward = TweenService:Create(root, tweenInfo, {CFrame = forwardPos})
-        tweenForward:Play()
-        tweenForward.Completed:Wait()
+        
+        local safe = tweenForcefieldCFrameSync(root, forwardPos, 0.5)
+        if not safe then return end
         
         task.wait(0.3)
         
-        local tweenBack = TweenService:Create(root, tweenInfo, {CFrame = originalPos})
-        tweenBack:Play()
-        tweenBack.Completed:Wait()
+        if AutoFarmHandler and AutoFarmHandler.checkSafety then
+            local stillSafe, r = AutoFarmHandler.checkSafety()
+            if not stillSafe and Config.ServerHopOnDanger and AutoFarmHandler.executeServerHop then
+                AutoFarmHandler.executeServerHop()
+                return
+            end
+        end
+        
+        safe = tweenForcefieldCFrameSync(root, originalPos, 0.5)
+        if not safe then return end
         print("[PuppyHub] Forcefield removed. Resume operations.")
     end
 
@@ -290,13 +403,11 @@ local function AutoLoginRoutine()
             local continueBtn = menuFrame:FindFirstChild("Continue")
             if continueBtn and continueBtn:IsA("ImageButton") then
                 task.wait(1)
-                if firesignal then
-                    firesignal(continueBtn.MouseButton1Down)
-                    task.wait(0.1)
-                    firesignal(continueBtn.MouseButton1Up)
-                    task.wait(0.1)
-                    firesignal(continueBtn.MouseButton1Click)
-                end
+                print("[PuppyHub] Moving physical mouse to Continue button...")
+                moveMouseToGui(continueBtn)
+                task.wait(0.1)
+                clickMouse()
+                print("[PuppyHub] Continue clicked!")
             end
         end
     end
