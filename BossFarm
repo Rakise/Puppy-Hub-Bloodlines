@@ -1228,6 +1228,18 @@ function Loot.collectNearBoss(bossName, config)
     local startTime = tick()
     local maxWait = 30 -- Max seconds to wait for loot
     local noNewItemTimer = 0
+    local MIN_LOOT_WAIT = 10 -- Minimum seconds before allowing no-new-items exit
+    
+    -- Grace period: wait for fresh loot to spawn before scanning
+    -- This prevents stale loot from previous kills triggering a premature exit
+    for g = 1, 3 do
+        pData = Utils.getPlayerData()
+        if pData then
+            pData.rootPart.CFrame = CFrame.new(lootSpot + Vector3.new(0, 15, 0))
+        end
+        if checkSafety() then break end
+        task.wait(1)
+    end
     
     -- Dynamic loop: grab queue, exit when no new items
     while tick() - startTime < maxWait do
@@ -1256,8 +1268,9 @@ function Loot.collectNearBoss(bossName, config)
             noNewItemTimer = noNewItemTimer + 1
         end
         
-        -- Exit condition
-        if #collectedNames > 0 and noNewItemTimer >= 5 then
+        -- Exit condition: only after minimum wait has passed
+        local elapsed = tick() - startTime
+        if elapsed >= MIN_LOOT_WAIT and #collectedNames > 0 and noNewItemTimer >= 5 then
             break
         end
         
@@ -1511,13 +1524,9 @@ function Farm.farmBoss(hum, model, bossName)
     -- This prevents the suspicious "teleport to boss feet → immediately flee" pattern
     local contested, nearPlayer = Safety.isBossContested(model, BossFarm.Settings.PlayerDetectionRadius)
     if contested then
-        Utils.log("Pre-engagement: Players near " .. bossName .. " (" .. tostring(nearPlayer) .. "), aborting!")
-        if BossFarm.Settings.ServerHopIfChakraSense then
-            Safety.evacuateAndHop("Players near " .. bossName .. " (pre-engage: " .. tostring(nearPlayer) .. ")")
-        else
-            Safety.evacuateAndHide("Players near " .. bossName .. " (pre-engage: " .. tostring(nearPlayer) .. ")")
-        end
-        return
+        Utils.log("Pre-engagement: Players near " .. bossName .. " (" .. tostring(nearPlayer) .. "), skipping.")
+        Utils.notify("Players near " .. bossName .. ", skipping...", 2)
+        return "contested"
     end
     
     -- Check chakra sense before engaging
@@ -1572,7 +1581,16 @@ function Farm.farmBoss(hum, model, bossName)
             or not model or not model.Parent
         
         if bossDead then
-            -- Stop combat systems first
+            -- Anti-Kamui: immediately anchor above the last known boss position
+            -- This prevents falling into the void when the boss model disappears
+            if State.lastBossPosition then
+                local pd = Utils.getPlayerData()
+                if pd then
+                    pd.rootPart.CFrame = CFrame.new(State.lastBossPosition + Vector3.new(0, 10, 0))
+                end
+            end
+            
+            -- Stop combat systems
             Farm.stopCurrent()
             Webhook.send("💀 Boss Killed", "**" .. bossName .. "** has been defeated!", 3066993)
             
@@ -1840,6 +1858,9 @@ function BossLoop.start()
                 end
             end
             
+            local skippedCount = 0
+            local totalProcessed = #indicesToProcess
+            
             for _, i in ipairs(indicesToProcess) do
                 if not BossFarm.Settings.BossLoopEnabled or not State.running then break end
                 
@@ -1848,6 +1869,28 @@ function BossLoop.start()
                 
                 local config = BOSS_CONFIGS[bossName]
                 if not config then continue end
+                
+                -- Check chakra sense before even looking for the boss (server-wide danger)
+                local senseActive, sensePlayer = Safety.isChakraSenseActive()
+                if senseActive then
+                    if BossFarm.Settings.ServerHopIfChakraSense then
+                        Safety.evacuateAndHop("Chakra Sense (" .. sensePlayer .. ") in loop")
+                    else
+                        Safety.evacuateAndHide("Chakra Sense (" .. sensePlayer .. ") in loop")
+                    end
+                    return
+                end
+                
+                -- Check if contested BEFORE spawning/finding
+                -- For trigger-spawn bosses, check the trigger position
+                if config.triggerSpawn and config.triggerPos then
+                    local contested, nearPlayer = Safety.isPlayerNearPosition(config.triggerPos, BossFarm.Settings.PlayerDetectionRadius)
+                    if contested then
+                        Utils.notify(bossName .. " area contested, skipping...", 2)
+                        skippedCount = skippedCount + 1
+                        continue
+                    end
+                end
                 
                 -- Wait for boss to spawn (trigger if needed)
                 local hum, model
@@ -1862,15 +1905,13 @@ function BossLoop.start()
                     continue
                 end
                 
-                -- Check if contested
-                local contested, nearPlayer = Safety.isBossContested(model, BossFarm.Settings.PlayerDetectionRadius)
-                if contested then
-                    Safety.evacuateAndHop("Players near " .. bossName .. " (" .. tostring(nearPlayer) .. ")")
-                    return
-                end
+                -- Farm this boss (farmBoss will return "contested" if players are near)
+                local result = Farm.farmBoss(hum, model, bossName)
                 
-                -- Farm this boss (farmBoss handles loot collection internally before returning)
-                Farm.farmBoss(hum, model, bossName)
+                if result == "contested" then
+                    skippedCount = skippedCount + 1
+                    continue
+                end
                 
                 -- Clear current boss state after farmBoss finishes (in case looting flag was set)
                 State.currentBoss = nil
@@ -1879,6 +1920,12 @@ function BossLoop.start()
                 
                 -- Give a moment before moving to next boss
                 task.wait(2)
+            end
+            
+            -- If ALL bosses were skipped due to players, hop server
+            if skippedCount >= totalProcessed and totalProcessed > 0 then
+                Safety.evacuateAndHop("All " .. skippedCount .. " bosses contested!")
+                return
             end
             
             -- Full loop complete — reset index for next cycle
