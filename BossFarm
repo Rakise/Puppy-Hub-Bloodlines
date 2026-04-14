@@ -1974,5 +1974,13 @@ BossFarm.setWeaponBoost = function(val)
         State.weaponHeightBoost = val
     end
 end
+BossFarm.teleportToSafeSpot = function()
+    local spot = Safety.getSafeSpot() or Vector3.new(-3933, 1120, -4571)
+    local pData = Utils.getPlayerData()
+    if pData then
+        pData.rootPart.CFrame = CFrame.new(spot + Vector3.new(0, 3, 0))
+        Utils.notify("Teleported to Safe Spot!", 3)
+    end
+end
 
 return BossFarm

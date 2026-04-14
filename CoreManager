@@ -1047,6 +1047,14 @@ if BossFarm and AutoFarmHandler then
     })
 
     FarmRight:AddDivider()
+    
+    FarmRight:AddButton('TP to Secret Spot', function()
+        if BossFarm then
+            BossFarm.teleportToSafeSpot()
+        end
+    end)
+    
+    FarmRight:AddDivider()
 
     FarmRight:AddToggle('AutoLootToggle', {
         Text = 'Auto-Loot On Kill',
