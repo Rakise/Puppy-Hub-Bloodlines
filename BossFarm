@@ -54,17 +54,8 @@ BossFarm.Settings = {
 -- ============================================
 -- WEAPON CONFIGS
 -- ============================================
-local KNOWN_WEAPONS = {
-    "Onyx Resanagi", "Golden Resanagi", "Silver Resanagi",
-    "Onyx Zabunagi", "Golden Zabunagi", "Silver Zabunagi",
-    "Onyx Asumai",
-}
-local KNOWN_WEAPON_SET = {}
-for _, w in ipairs(KNOWN_WEAPONS) do KNOWN_WEAPON_SET[w] = true end
-
-local WEAPON_HEIGHT_BOOSTS = {
-    ["Onyx Asumai"] = -3,
-    ["Fist"] = -2,
+local WEAPON_KEYWORDS = {
+    "kunai", "asumai", "katana", "zabunagi", "resanagi", "haldberd"
 }
 
 -- ============================================
@@ -394,9 +385,14 @@ function Weapons.scanHotbar()
             if not slot then continue end
             local slotText = slot:FindFirstChild("SlotText")
             local itemName = slotText and slotText:IsA("TextLabel") and slotText.Text or ""
-            if itemName ~= "" and KNOWN_WEAPON_SET[itemName] then
-                found = itemName
-                return
+            if itemName ~= "" then
+                local l = string.lower(itemName)
+                for _, kw in ipairs(WEAPON_KEYWORDS) do
+                    if string.find(l, kw) then
+                        found = itemName
+                        return
+                    end
+                end
             end
         end
     end)
@@ -511,6 +507,23 @@ function Safety.isChakraSenseActive()
         end
     end
     return false
+end
+
+function Safety.getSafeSpot()
+    local pd = Utils.getPlayerData()
+    if pd then
+        -- Prefer staying at the one we are already at
+        if (pd.rootPart.Position - SECRET_SPOT_BACKUP).Magnitude < 50 then return SECRET_SPOT_BACKUP end
+        if (pd.rootPart.Position - SECRET_SPOT).Magnitude < 50 then return SECRET_SPOT end
+    end
+    
+    local primaryContested = Safety.isPlayerNearPosition(SECRET_SPOT, BossFarm.Settings.PlayerDetectionRadius)
+    if not primaryContested then return SECRET_SPOT end
+    
+    local backupContested = Safety.isPlayerNearPosition(SECRET_SPOT_BACKUP, BossFarm.Settings.PlayerDetectionRadius)
+    if not backupContested then return SECRET_SPOT_BACKUP end
+    
+    return nil -- both are compromised!
 end
 
 function Safety.evacuateAndHop(reason)
@@ -1461,7 +1474,19 @@ function Farm.farmBoss(hum, model, bossName)
     
     -- Detect and equip weapon
     State.detectedWeapon = Weapons.scanHotbar()
-    State.weaponHeightBoost = WEAPON_HEIGHT_BOOSTS[State.detectedWeapon] or 0
+    
+    local wBoost = 0
+    if State.detectedWeapon then
+        local l = string.lower(State.detectedWeapon)
+        if string.find(l, "asumai") or string.find(l, "kunai") then
+            wBoost = -5
+        elseif string.find(l, "katana") or string.find(l, "zabunagi") or string.find(l, "resanagi") or string.find(l, "haldberd") then
+            wBoost = -1.5
+        elseif string.find(l, "fist") then
+            wBoost = -2
+        end
+    end
+    State.weaponHeightBoost = wBoost
     Weapons.equip(State.detectedWeapon)
     if State.detectedWeapon ~= "Fist" then
         Utils.notify("Weapon: " .. State.detectedWeapon, 2)
