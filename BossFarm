@@ -1433,6 +1433,37 @@ end
 -- ============================================
 Farm = {}
 
+function Weapons.equip(weaponName)
+    local pData = Utils.getPlayerData()
+    if not pData then return end
+    if not weaponName then return end
+    
+    local tool = pData.backpack:FindFirstChild(weaponName)
+    if tool then
+        pData.humanoid:EquipTool(tool)
+    end
+end
+
+function Weapons.updateBoost()
+    State.detectedWeapon = Weapons.scanHotbar()
+    local wBoost = 0
+    if State.detectedWeapon then
+        local l = string.lower(State.detectedWeapon)
+        if string.find(l, "asumai") or string.find(l, "kunai") then
+            wBoost = -5
+        elseif string.find(l, "katana") or string.find(l, "zabunagi") or string.find(l, "resanagi") or string.find(l, "haldberd") then
+            wBoost = -1.5
+        elseif string.find(l, "fist") then
+            wBoost = -2
+        end
+    end
+    State.weaponHeightBoost = wBoost
+    Weapons.equip(State.detectedWeapon)
+    if State.detectedWeapon ~= "Fist" then
+        Utils.notify("Weapon: " .. State.detectedWeapon, 2)
+    end
+end
+
 function Farm.farmBoss(hum, model, bossName)
     local pData = Utils.getPlayerData()
     if not pData then return end
@@ -1473,24 +1504,7 @@ function Farm.farmBoss(hum, model, bossName)
     State.isLooting = false
     
     -- Detect and equip weapon
-    State.detectedWeapon = Weapons.scanHotbar()
-    
-    local wBoost = 0
-    if State.detectedWeapon then
-        local l = string.lower(State.detectedWeapon)
-        if string.find(l, "asumai") or string.find(l, "kunai") then
-            wBoost = -5
-        elseif string.find(l, "katana") or string.find(l, "zabunagi") or string.find(l, "resanagi") or string.find(l, "haldberd") then
-            wBoost = -1.5
-        elseif string.find(l, "fist") then
-            wBoost = -2
-        end
-    end
-    State.weaponHeightBoost = wBoost
-    Weapons.equip(State.detectedWeapon)
-    if State.detectedWeapon ~= "Fist" then
-        Utils.notify("Weapon: " .. State.detectedWeapon, 2)
-    end
+    Weapons.updateBoost()
     
     -- Setup per-boss animation monitors
     AnimMonitors.setup(model, bossName, config)
@@ -1540,8 +1554,10 @@ function Farm.farmBoss(hum, model, bossName)
         if cPData.humanoid.Health < State.healthThreshold then
             Utils.notify("Health low! Retreating to regen...", 3)
             Farm.stopCurrent()
+            
+            local safeSpot = Safety.getSafeSpot() or SECRET_SPOT 
             local pd = Utils.getPlayerData()
-            if pd then pd.rootPart.CFrame = CFrame.new(SECRET_SPOT) end
+            if pd then pd.rootPart.CFrame = CFrame.new(safeSpot) end
             
             -- Wait until HP is back to 100% (or farm is stopped)
             Utils.log("Waiting for HP to regen to 100%...")
@@ -1549,8 +1565,14 @@ function Farm.farmBoss(hum, model, bossName)
                 local regenData = Utils.getPlayerData()
                 if not regenData then break end
                 
-                -- Walk randomly at secret spot (looks natural if a mod is watching)
-                Utils.randomWalkAt(SECRET_SPOT, 6)
+                -- Enforce TP if game rubberbands us back to boss due to fake fall damage
+                local dist = (regenData.rootPart.Position - safeSpot).Magnitude
+                if dist > 30 then
+                    regenData.rootPart.CFrame = CFrame.new(safeSpot)
+                else
+                    -- Walk randomly at safe spot (looks natural if a mod is watching)
+                    Utils.randomWalkAt(safeSpot, 6)
+                end
                 
                 if regenData.humanoid.Health >= regenData.humanoid.MaxHealth then
                     Utils.log("HP fully regenerated!")
@@ -1590,6 +1612,7 @@ function Farm.farmBoss(hum, model, bossName)
                         State.healthThreshold = newPData.humanoid.MaxHealth * 0.5
                     end
                     
+                    Weapons.updateBoost()
                     AnimMonitors.setup(model, bossName, config)
                     Knocked.monitor(model)
                     task.wait(0.5)
