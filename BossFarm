@@ -1347,6 +1347,29 @@ function Positioning.startAnchoring(model, config)
                     bossRoot.Position + Vector3.new(0, yOffset, 0),
                     bossRoot.Position
                 )
+                
+                -- Anti-Snipe System (spawn invisible platform beneath feet to reset fall duration flag)
+                local now = tick()
+                if not State.lastGroundTouch then State.lastGroundTouch = now end
+                if now - State.lastGroundTouch > 11 then
+                    if not State.antiSnipePart then
+                        State.antiSnipePart = Instance.new("Part")
+                        State.antiSnipePart.Size = Vector3.new(4, 1, 4)
+                        State.antiSnipePart.Anchored = true
+                        State.antiSnipePart.CanCollide = true
+                        State.antiSnipePart.Transparency = 1
+                        State.antiSnipePart.Parent = workspace
+                    end
+                    State.antiSnipePart.CFrame = pData.rootPart.CFrame * CFrame.new(0, -3.2, 0)
+                    
+                    if now - State.lastGroundTouch > 11.5 then
+                        State.lastGroundTouch = now
+                        if State.antiSnipePart then
+                            pcall(function() State.antiSnipePart:Destroy() end)
+                            State.antiSnipePart = nil
+                        end
+                    end
+                end
             end
         end)
     end)
@@ -1662,6 +1685,8 @@ function Farm.stopCurrent()
     State.weaponHeightBoost = 0
     State.inDanger = false
     State.bossDeathDetected = false
+    State.lastGroundTouch = nil
+    if State.antiSnipePart then pcall(function() State.antiSnipePart:Destroy() end); State.antiSnipePart = nil end
     -- Don't clear currentBoss here during looting — farmBoss checks it in the while loop
     if not State.isLooting then
         State.currentBoss = nil
