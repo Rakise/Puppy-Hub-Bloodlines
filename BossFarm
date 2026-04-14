@@ -1117,26 +1117,82 @@ function Loot.collectNearBoss(bossName, config)
         return not entry.obj.Parent
     end
     
-    -- Helper: safety check --
+    -- Helper: safety check (inline hide-and-return, does NOT destroy farm state)
+    -- Returns true only if we must ABORT looting entirely (e.g. hop triggered)
+    local lootAborted = false
     local function checkSafety()
         local senseActive, sensePlayer = Safety.isChakraSenseActive()
-        if senseActive then
-            if BossFarm.Settings.ServerHopIfChakraSense then
-                Safety.evacuateAndHop("Chakra Sense (" .. sensePlayer .. ") while looting!")
-            else
-                Safety.evacuateAndHide("Chakra Sense (" .. sensePlayer .. ") while looting!")
-            end
-            return true
-        end
         local contested, nearPlayer = Safety.isPlayerNearPosition(lootSpot, BossFarm.Settings.PlayerDetectionRadius)
-        if contested then
-            if BossFarm.Settings.ServerHopIfChakraSense then
-                Safety.evacuateAndHop("Players nearby! (" .. tostring(nearPlayer) .. ") while looting!")
-            else
-                Safety.evacuateAndHide("Players nearby! (" .. tostring(nearPlayer) .. ") while looting!")
-            end
+        
+        if not senseActive and not contested then return false end
+        
+        local reason = senseActive 
+            and ("Chakra Sense (" .. (sensePlayer or "?") .. ") while looting")
+            or ("Players nearby (" .. (nearPlayer or "?") .. ") while looting")
+        
+        Utils.notify("Hiding from danger while looting...", 3)
+        Utils.log(reason)
+        
+        -- Teleport to safe spot and wait for danger to clear
+        local safeSpot = Safety.getSafeSpot()
+        if not safeSpot then
+            -- Both safe spots compromised — must hop
+            Safety.evacuateAndHop("No safe spot available while looting!")
+            lootAborted = true
             return true
         end
+        
+        local pd = Utils.getPlayerData()
+        if pd then pd.rootPart.CFrame = CFrame.new(safeSpot) end
+        
+        -- Wait for danger to clear (max 60s before giving up and hopping)
+        local hideStart = tick()
+        while tick() - hideStart < 60 do
+            local cpd = Utils.getPlayerData()
+            if cpd then
+                local dist = (cpd.rootPart.Position - safeSpot).Magnitude
+                if dist > 30 then cpd.rootPart.CFrame = CFrame.new(safeSpot) end
+            end
+            Utils.randomWalkAt(safeSpot, 6)
+            
+            local stillSense = Safety.isChakraSenseActive()
+            local stillContested = Safety.isPlayerNearPosition(lootSpot, BossFarm.Settings.PlayerDetectionRadius)
+            if not stillSense and not stillContested then
+                break
+            end
+            
+            if tick() - hideStart >= 60 then
+                Safety.evacuateAndHop("Danger persisted 60s while looting!")
+                lootAborted = true
+                return true
+            end
+            task.wait(2)
+        end
+        
+        -- Coast is clear — return to loot spot
+        Utils.notify("Coast clear! Returning to loot...", 3)
+        pd = Utils.getPlayerData()
+        if pd then pd.rootPart.CFrame = CFrame.new(lootSpot + Vector3.new(0, 15, 0)) end
+        
+        -- Wait the 5-10 second respawn cooldown before items become pickable again
+        local respawnWait = math.random(8, 10)
+        Utils.log("Waiting " .. respawnWait .. "s loot respawn cooldown...")
+        for w = 1, respawnWait do
+            pd = Utils.getPlayerData()
+            if pd then pd.rootPart.CFrame = CFrame.new(lootSpot + Vector3.new(0, 15, 0)) end
+            task.wait(1)
+        end
+        
+        -- Reset seen objects so items can be re-queued after returning
+        seenObj = {}
+        -- Re-scan workspace for items that are still there
+        for _, obj in ipairs(workspace:GetChildren()) do
+            queueObj(obj)
+            if obj:IsA("Folder") or obj:IsA("Model") then
+                for _, child in ipairs(obj:GetChildren()) do queueObj(child) end
+            end
+        end
+        
         return false
     end
     
