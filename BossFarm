@@ -107,11 +107,11 @@ local BOSS_CONFIGS = {
         animationResponse = "height", safeHeightBoost = 15,
     },
     ["Tairock"] = {
-        height = 10.75, positionAbove = false,
+        height = 10.75, positionAbove = true,
         triggerSpawn = true,
     },
     ["Hallowed Tairock"] = {
-        height = 10.75, positionAbove = false,
+        height = 10.75, positionAbove = true,
     },
     ["Chakra Knight"] = {
         height = 15, positionAbove = false,
@@ -315,16 +315,15 @@ function Utils.safeTeleport(targetCFrame)
         return
     end
     
-    -- 1 tick before: spawn perfectly spherical water at destination
-    pcall(function() workspace.Terrain:FillBall(pos, 6, Enum.Material.Water) end)
+    -- 1 tick before: spawn perfectly spherical water at destination (3x larger)
+    pcall(function() workspace.Terrain:FillBall(pos, 18, Enum.Material.Water) end)
     RunService.Heartbeat:Wait()
     -- Teleport directly into the water
     pData.rootPart.CFrame = targetCFrame
-    -- Let physics engine register the Swim state
-    task.wait(0.1)
+    -- Let physics engine fully register the Swim state (extended to 0.15s)
+    task.wait(0.15)
     -- Remove the water
-    pcall(function() workspace.Terrain:FillBall(pos, 6, Enum.Material.Air) end)
-end
+    pcall(function() workspace.Terrain:FillBall(pos, 18, Enum.Material.Air) end)end
 function Utils.disconnectAll()
     for i = #State.connections, 1, -1 do
         local conn = State.connections[i]
