@@ -44,6 +44,7 @@ BossFarm.Settings = {
     -- Advanced Boss Loop
     BossLoopEnabled = false,
     HopAfterLoop = false,
+    WeaponHeightBoost = -2.25,
     -- Auto Sell
     AutoSellTrinkets = false,
     AutoSellGems = false,
@@ -1446,13 +1447,10 @@ function Weapons.updateBoost()
     State.detectedWeapon = Weapons.scanHotbar()
     local wBoost = 0
     if State.detectedWeapon then
-        local l = string.lower(State.detectedWeapon)
-        if string.find(l, "asumai") or string.find(l, "kunai") then
-            wBoost = -5
-        elseif string.find(l, "katana") or string.find(l, "zabunagi") or string.find(l, "resanagi") or string.find(l, "haldberd") then
-            wBoost = -1.5
-        elseif string.find(l, "fist") then
+        if string.find(string.lower(State.detectedWeapon), "fist") then
             wBoost = -2
+        else
+            wBoost = BossFarm.Settings.WeaponHeightBoost or -2.25
         end
     end
     State.weaponHeightBoost = wBoost
@@ -1970,5 +1968,11 @@ BossFarm.bossDatabase = bossDatabase
 BossFarm.getDetectedWeapon = function() return State.detectedWeapon end
 BossFarm.isRunning = function() return State.running end
 BossFarm.getCurrentBoss = function() return State.currentBoss end
+BossFarm.setWeaponBoost = function(val)
+    BossFarm.Settings.WeaponHeightBoost = val
+    if State.detectedWeapon and not string.find(string.lower(State.detectedWeapon), "fist") then
+        State.weaponHeightBoost = val
+    end
+end
 
 return BossFarm

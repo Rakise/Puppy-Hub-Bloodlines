@@ -639,6 +639,9 @@ if BossFarm then
     BossFarm.Settings.AutoSellGems = Config.BossAutoSellGems
     BossFarm.Settings.SelectedBosses = Config.BossSelectedBosses or {}
     BossFarm.Settings.WebhookURL = Config.BossWebhookURL or ""
+    if Config.BossWeaponHeightBoost ~= nil then
+        BossFarm.Settings.WeaponHeightBoost = Config.BossWeaponHeightBoost
+    end
 end
 
 -- Auto-login ONLY on actual server hop (marker file written by hop systems)
@@ -1022,6 +1025,24 @@ if BossFarm and AutoFarmHandler then
             BossFarm.Settings.SelectedBosses = val
             Config.BossSelectedBosses = val
             SaveConfig()
+        end
+    })
+
+    FarmRight:AddDivider()
+    
+    FarmRight:AddSlider('WeaponBoostSlider', {
+        Text = 'Weapon Height Boost',
+        Default = Config.BossWeaponHeightBoost or -2.25,
+        Min = -5,
+        Max = 0,
+        Rounding = 2,
+        Tooltip = 'Adjust hover offset for weapons instantly. Lower = closer.',
+        Callback = function(val)
+            Config.BossWeaponHeightBoost = val
+            SaveConfig()
+            if BossFarm then
+                BossFarm.setWeaponBoost(val)
+            end
         end
     })
 
