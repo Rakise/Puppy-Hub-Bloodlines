@@ -667,7 +667,8 @@ function Safety.evacuateAndHop(reason)
             if safeSpot then
                 local cpd = Utils.getPlayerData()
                 if cpd then 
-                    local dist = (cpd.rootPart.Position - safeSpot).Magnitude
+                    -- Ignore Y axis distance so gravity drop doesn't cause forced rubberbanding
+                    local dist = Vector3.new(cpd.rootPart.Position.X - safeSpot.X, 0, cpd.rootPart.Position.Z - safeSpot.Z).Magnitude
                     if dist > 30 then
                         cpd.rootPart.CFrame = CFrame.new(safeSpot) 
                     end
@@ -746,7 +747,8 @@ function Safety.evacuateAndHide(reason)
             -- HOLD safe spot every tick (absolute enforcement)
             local cpd = Utils.getPlayerData()
             if cpd then
-                local dist = (cpd.rootPart.Position - safeSpot).Magnitude
+                -- Ignore Y axis distance so gravity drop doesn't cause forced rubberbanding
+                local dist = Vector3.new(cpd.rootPart.Position.X - safeSpot.X, 0, cpd.rootPart.Position.Z - safeSpot.Z).Magnitude
                 if dist > 30 then
                     cpd.rootPart.CFrame = CFrame.new(safeSpot)
                 end
@@ -2320,7 +2322,7 @@ function Weapons.updateBoost()
     local wBoost = 0
     if State.detectedWeapon then
         if string.find(string.lower(State.detectedWeapon), "fist") then
-            wBoost = -2
+            wBoost = -3
         else
             wBoost = BossFarm.Settings.WeaponHeightBoost or 0
         end
@@ -2438,10 +2440,13 @@ function Farm.farmBoss(hum, model, bossName)
                 local regenData = Utils.getPlayerData()
                 if not regenData then break end
                 
-                -- Enforce TP if game rubberbands us back to boss due to fake fall damage
-                local dist = (regenData.rootPart.Position - safeSpot).Magnitude
+                -- Enforce TP if game rubberbands us horizontally far away (ignore Y for gravity)
+                local dist = Vector3.new(regenData.rootPart.Position.X - safeSpot.X, 0, regenData.rootPart.Position.Z - safeSpot.Z).Magnitude
                 if dist > 30 then
                     regenData.rootPart.CFrame = CFrame.new(safeSpot)
+                else
+                    -- Walk randomly at safe spot (looks natural if a mod is watching)
+                    Utils.randomWalkAt(safeSpot, 6)
                 end
                 
                 if regenData.humanoid.Health >= regenData.humanoid.MaxHealth then
