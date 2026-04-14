@@ -176,8 +176,7 @@ local SECRET_SPOT = Vector3.new(-3933, 1120, -4571)
 local SECRET_SPOT_BACKUP = Vector3.new(-2605.41016, 629.647888, -5373.87207)
 local HYUGA_VOID_SAFE_SPOT = Vector3.new(-700.8, -334.3, -780.8)
 local HYUGA_DANGER_DODGE_SPOT = Vector3.new(-1469.2, -359.9, -9610.4)
-local HAKU_SAFE_SPOT = Vector3.new(-1469.2, 1120, -9610.4)
-
+local HAKU_SAFE_SPOT = Vector3.new(-5788.1, -238.5, -9723.9)
 -- ============================================
 -- CHARGE ANIMATION
 -- ============================================
