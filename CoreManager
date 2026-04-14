@@ -1032,7 +1032,7 @@ if BossFarm and AutoFarmHandler then
     
     FarmRight:AddSlider('WeaponBoostSlider', {
         Text = 'Weapon Height Boost',
-        Default = Config.BossWeaponHeightBoost or -1.4,
+        Default = Config.BossWeaponHeightBoost or 0,
         Min = -5,
         Max = 0,
         Rounding = 2,

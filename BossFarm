@@ -44,7 +44,7 @@ BossFarm.Settings = {
     -- Advanced Boss Loop
     BossLoopEnabled = false,
     HopAfterLoop = false,
-    WeaponHeightBoost = -1.4,
+    WeaponHeightBoost = 0,
     -- Auto Sell
     AutoSellTrinkets = false,
     AutoSellGems = false,
@@ -1473,7 +1473,7 @@ function Weapons.updateBoost()
         if string.find(string.lower(State.detectedWeapon), "fist") then
             wBoost = -2
         else
-            wBoost = BossFarm.Settings.WeaponHeightBoost or -1.4
+            wBoost = BossFarm.Settings.WeaponHeightBoost or 0
         end
     end
     State.weaponHeightBoost = wBoost
