@@ -263,31 +263,18 @@ local function handleClayDoll(dollModel)
     local originalAnchored = root.Anchored
     root.Anchored = true
     
-    -- Start blocking via remote
-    local df = getDataFunctionRemote()
-    if df then
-        pcall(function() df:InvokeServer("Block") end)
-        print("[AutoFarm] 🛡️ Block activated via remote.")
-    end
+    -- Start blocking via VirtualInputManager
+    local VM = game:GetService('VirtualInputManager')
+    pcall(function() VM:SendKeyEvent(true, Enum.KeyCode.F, false, game) end)
+    print("[AutoFarm] 🛡️ Block activated via VirtualInputManager.")
 
-    -- Face the doll and keep block active
+    -- Face the doll while blocking
     local defenseLoop = RunService.Heartbeat:Connect(function()
         if not dollModel or not dollModel.Parent then return end
         local dollRoot = dollModel:FindFirstChild("HumanoidRootPart") or dollModel.PrimaryPart
         if dollRoot and root then
             local lookPos = Vector3.new(dollRoot.Position.X, root.Position.Y, dollRoot.Position.Z)
             root.CFrame = CFrame.lookAt(root.Position, lookPos)
-        end
-    end)
-    
-    -- Spam block remote to keep it held
-    local blockSpamThread = task.spawn(function()
-        while State.IsDefending and dollModel and dollModel.Parent do
-            pcall(function()
-                local dfr = getDataFunctionRemote()
-                if dfr then dfr:InvokeServer("Block") end
-            end)
-            task.wait(0.5)
         end
     end)
 
@@ -299,26 +286,11 @@ local function handleClayDoll(dollModel)
     end
 
     if defenseLoop then defenseLoop:Disconnect() end
-    if blockSpamThread then pcall(task.cancel, blockSpamThread) end
     if root then root.Anchored = originalAnchored end
 
-    -- Unblock via KeyPress F (0x46)
-    if keypress and keyrelease then
-        pcall(function()
-            keypress(0x46)
-            task.wait(0.1)
-            keyrelease(0x46)
-            
-            task.wait(0.1)
-            
-            keypress(0x46)
-            task.wait(0.1)
-            keyrelease(0x46)
-        end)
-        print("[AutoFarm] 🛡️ Simulated 'F' key presses to unblock.")
-    else
-        warn("[AutoFarm] Executor missing keypress/keyrelease functions. Character may remain blocking.")
-    end
+    -- Unblock via VirtualInputManager
+    pcall(function() VM:SendKeyEvent(false, Enum.KeyCode.F, false, game) end)
+    print("[AutoFarm] 🛡️ Unblocked via VirtualInputManager.")
 
     print("[AutoFarm] ✅ Clay Doll neutralized. Resuming farm.")
     State.IsDefending = false
