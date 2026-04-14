@@ -435,13 +435,21 @@ end
 
 -- Waits until chakra sense / danger clears, or hops if configured
 -- Returns false if we hopped (caller should abort), true if safe to continue
-local function waitForSafety(root)
+local function waitForSafety(root, instantHop)
     local unsafeStart = tick()
     while true do
         local unsafe, reason = isChakraSenseDuringForcefield()
         if not unsafe then return true end -- Safe again, continue
         
-        -- If unsafe for >15s, hop
+        -- If instantHop is true, hop IMMEDIATELY without waiting 15 seconds
+        if instantHop and Config.ServerHopOnDanger and AutoFarmHandler.executeServerHop then
+            print("[PuppyHub] ⚠️ Danger detected before starting: " .. tostring(reason) .. ". Hopping INSTANTLY...")
+            root.CFrame = CFrame.new(-3933, 1120, -4571)
+            AutoFarmHandler.executeServerHop()
+            return false
+        end
+        
+        -- If unsafe for >15s during tween, hop
         if tick() - unsafeStart > 15 and Config.ServerHopOnDanger and AutoFarmHandler.executeServerHop then
             print("[PuppyHub] ⚠️ Danger persisted 15s during forcefield: " .. tostring(reason) .. ". Hopping...")
             root.CFrame = CFrame.new(-3933, 1120, -4571)
@@ -462,7 +470,7 @@ local function tweenForcefieldCFrameSync(root, targetCFrame, duration)
         if unsafe then
             -- PAUSE the tween — don't tween back, just freeze and wait
             print("[PuppyHub] ⏸️ Danger during tween: " .. tostring(reason) .. ". Pausing...")
-            local canContinue = waitForSafety(root)
+            local canContinue = waitForSafety(root, false)
             if not canContinue then return false end
             -- Reset tween timing from current position
             print("[PuppyHub] ▶️ Danger cleared, resuming tween...")
@@ -485,7 +493,8 @@ local function RemoveForcefield()
     local root = char and char:FindFirstChild("HumanoidRootPart")
     if not root then return end
     
-    local canStart = waitForSafety(root)
+    -- If danger is found BEFORE we start removing forcefield, hop INSTANTLY
+    local canStart = waitForSafety(root, true)
     if not canStart then return end
     
     if AutoFarmHandler and AutoFarmHandler.emergencyStop then
@@ -502,8 +511,8 @@ local function RemoveForcefield()
     
     task.wait(0.3)
     
-    -- Check again between tweens
-    local canContinue = waitForSafety(root)
+    -- Check again between tweens (not instant hop here, pause instead)
+    local canContinue = waitForSafety(root, false)
     if not canContinue then return end
     
     safe = tweenForcefieldCFrameSync(root, originalPos, 0.5)
@@ -532,16 +541,8 @@ local function AutoLoginRoutine()
                 print("[PuppyHub] Found Continue button, attempting click...")
                 
                 -- Virtual click with proper GuiInset handling
-                if VirtualMouse.clickGui(continueBtn) then
-                    print("[PuppyHub] Continue clicked!")
-                else
-                    -- Fallback: Physical mouse (needs window focused)
-                    print("[PuppyHub] VIM unavailable, using physical mouse...")
-                    moveMouseToGui(continueBtn)
-                    task.wait(0.1)
-                    clickMouse()
-                    print("[PuppyHub] Continue clicked (physical)!")
-                end
+                VirtualMouse.clickGui(continueBtn)
+                print("[PuppyHub] Continue clicked!")
                 
                 task.wait(1)
             end
@@ -554,7 +555,10 @@ local function AutoLoginRoutine()
         local safe, reason = AutoFarmHandler.checkSafety()
         if not safe then
             if Config.ServerHopOnDanger then
-                print("[PuppyHub] ⚠️ Unsafe: " .. tostring(reason) .. ". Hopping...")
+                print("[PuppyHub] ⚠️ Unsafe before tween: " .. tostring(reason) .. ". Hopping INSTANTLY...")
+                local char = LocalPlayer.Character
+                local root = char and char:FindFirstChild("HumanoidRootPart")
+                if root then root.CFrame = CFrame.new(-3933, 1120, -4571) end
                 if AutoFarmHandler.executeServerHop then AutoFarmHandler.executeServerHop() return end
             else
                 print("[PuppyHub] ⚠️ Unsafe: " .. tostring(reason) .. ". Server Hop disabled, staying.")

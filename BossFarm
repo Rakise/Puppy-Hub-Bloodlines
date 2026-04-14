@@ -538,7 +538,10 @@ function Safety.evacuateAndHop(reason)
     -- NOW teleport to safe spot (anchor is already dead, can't fight back)
     local pd = Utils.getPlayerData()
     if pd then
-        pd.rootPart.CFrame = CFrame.new(SECRET_SPOT)
+        local distToSpot = (pd.rootPart.Position - SECRET_SPOT).Magnitude
+        if distToSpot > 20 then
+            pd.rootPart.CFrame = CFrame.new(SECRET_SPOT)
+        end
     end
     
     -- Full cleanup
@@ -551,9 +554,16 @@ function Safety.evacuateAndHop(reason)
     BossFarm.Settings.Enabled = false
     BossFarm.Settings.BossLoopEnabled = false
     
-    -- Random walk while waiting for hop
+    -- Wait and walk while hopping
     task.spawn(function()
         while State.evacuating do
+            local cpd = Utils.getPlayerData()
+            if cpd then 
+                local dist = (cpd.rootPart.Position - SECRET_SPOT).Magnitude
+                if dist > 30 then
+                    cpd.rootPart.CFrame = CFrame.new(SECRET_SPOT) 
+                end
+            end
             Utils.randomWalkAt(SECRET_SPOT, 6)
             task.wait(math.random(15, 30) / 10)
         end
@@ -597,10 +607,13 @@ function Safety.evacuateAndHide(reason)
     local wasInBossLoop = BossFarm.Settings.BossLoopEnabled
     local resumeIndex = State.bossLoopIndex
     
-    -- NOW teleport to safe spot (anchor is already dead, can't fight back)
+    -- NOW teleport to safe spot if not already there (anchor is already dead, can't fight back)
     local pd = Utils.getPlayerData()
     if pd then
-        pd.rootPart.CFrame = CFrame.new(SECRET_SPOT)
+        local distToSpot = (pd.rootPart.Position - SECRET_SPOT).Magnitude
+        if distToSpot > 20 then
+            pd.rootPart.CFrame = CFrame.new(SECRET_SPOT)
+        end
     end
     
     -- Full cleanup
