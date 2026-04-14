@@ -304,6 +304,27 @@ function Utils.getBossRoot(model)
         or model:FindFirstChildWhichIsA("BasePart")
 end
 
+-- Uses client-side Terrain water to grant absolute fall damage immunity upon arrival
+function Utils.safeTeleport(targetCFrame)
+    local pData = Utils.getPlayerData()
+    if not pData then return end
+    local pos = targetCFrame.Position
+    
+    if (pData.rootPart.Position - pos).Magnitude < 50 then
+        pData.rootPart.CFrame = targetCFrame
+        return
+    end
+    
+    -- 1 tick before: spawn perfectly spherical water at destination
+    pcall(function() workspace.Terrain:FillBall(pos, 6, Enum.Material.Water) end)
+    RunService.Heartbeat:Wait()
+    -- Teleport directly into the water
+    pData.rootPart.CFrame = targetCFrame
+    -- Let physics engine register the Swim state
+    task.wait(0.1)
+    -- Remove the water
+    pcall(function() workspace.Terrain:FillBall(pos, 6, Enum.Material.Air) end)
+end
 function Utils.disconnectAll()
     for i = #State.connections, 1, -1 do
         local conn = State.connections[i]
@@ -645,7 +666,7 @@ function Safety.evacuateAndHop(reason)
         if pd then
             local distToSpot = (pd.rootPart.Position - safeSpot).Magnitude
             if distToSpot > 20 then
-                pd.rootPart.CFrame = CFrame.new(safeSpot)
+                Utils.safeTeleport(CFrame.new(safeSpot))
             end
         end
     end
@@ -728,7 +749,7 @@ function Safety.evacuateAndHide(reason)
     if pd then
         local distToSpot = (pd.rootPart.Position - safeSpot).Magnitude
         if distToSpot > 20 then
-            pd.rootPart.CFrame = CFrame.new(safeSpot)
+            Utils.safeTeleport(CFrame.new(safeSpot))
         end
     end
     
@@ -1933,7 +1954,7 @@ function Loot.collectNearBoss(bossName, config)
         end
         
         local pd = Utils.getPlayerData()
-        if pd then pd.rootPart.CFrame = CFrame.new(safeSpot) end
+        if pd then Utils.safeTeleport(CFrame.new(safeSpot)) end
         
         -- Wait for danger to clear (max 60s before giving up and hopping)
         local hideStart = tick()
@@ -1961,14 +1982,14 @@ function Loot.collectNearBoss(bossName, config)
         -- Coast is clear — return to loot spot
         Utils.notify("Coast clear! Returning to loot...", 3)
         pd = Utils.getPlayerData()
-        if pd then pd.rootPart.CFrame = CFrame.new(lootSpot + Vector3.new(0, 15, 0)) end
+        if pd then Utils.safeTeleport(CFrame.new(lootSpot + Vector3.new(0, 15, 0))) end
         
         -- Wait the 5-10 second respawn cooldown before items become pickable again
         local respawnWait = math.random(8, 10)
         Utils.log("Waiting " .. respawnWait .. "s loot respawn cooldown...")
         for w = 1, respawnWait do
             pd = Utils.getPlayerData()
-            if pd then pd.rootPart.CFrame = CFrame.new(lootSpot + Vector3.new(0, 15, 0)) end
+            if pd then Utils.safeTeleport(CFrame.new(lootSpot + Vector3.new(0, 15, 0))) end
             task.wait(1)
         end
         
@@ -2080,7 +2101,7 @@ function Loot.collectNearBoss(bossName, config)
     for g = 1, 3 do
         pData = Utils.getPlayerData()
         if pData then
-            pData.rootPart.CFrame = CFrame.new(lootSpot + Vector3.new(0, 15, 0))
+            Utils.safeTeleport(CFrame.new(lootSpot + Vector3.new(0, 15, 0)))
         end
         if checkSafety() then break end
         task.wait(1)
@@ -2091,7 +2112,7 @@ function Loot.collectNearBoss(bossName, config)
         -- Hold position securely overhead to prevent being hit/stuck
         pData = Utils.getPlayerData()
         if pData then
-            pData.rootPart.CFrame = CFrame.new(lootSpot + Vector3.new(0, 15, 0))
+            Utils.safeTeleport(CFrame.new(lootSpot + Vector3.new(0, 15, 0)))
         end
         
         -- Safety check
@@ -2234,6 +2255,20 @@ function Positioning.startAnchoring(model, config)
                         bossRoot.Position
                     )
                 end
+                
+                -- Anti-Snipe / Anti-Void Fall System
+                -- Prevents the game from killing us after 11.5 seconds of floating without touching ground
+                if not State.antiSnipePart then
+                    State.antiSnipePart = Instance.new("Part")
+                    State.antiSnipePart.Size = Vector3.new(10, 3, 10)
+                    State.antiSnipePart.Anchored = true
+                    State.antiSnipePart.CanCollide = true
+                    State.antiSnipePart.Transparency = 1
+                    State.antiSnipePart.Parent = workspace
+                end
+                -- Set to -3.1 instead of -3.2 to slightly embed the player's feet, guaranteeing the physics engine registers "Landed" status.
+                State.antiSnipePart.CFrame = pData.rootPart.CFrame * CFrame.new(0, -3.1, 0)
+                pcall(function() pData.humanoid:ChangeState(Enum.HumanoidStateType.Landed) end)
             end
         end)
     end)
@@ -2415,7 +2450,7 @@ function Farm.farmBoss(hum, model, bossName)
             if State.lastBossPosition then
                 local pd = Utils.getPlayerData()
                 if pd then
-                    pd.rootPart.CFrame = CFrame.new(State.lastBossPosition + Vector3.new(0, 10, 0))
+                    Utils.safeTeleport(CFrame.new(State.lastBossPosition + Vector3.new(0, 10, 0)))
                 end
             end
             
@@ -2424,11 +2459,20 @@ function Farm.farmBoss(hum, model, bossName)
             Webhook.send("💀 Boss Killed", "**" .. bossName .. "** has been defeated!", 3066993)
             
             -- Loot collection: set flag to prevent anchor from repositioning us
-            if BossFarm.Settings.AutoLootOnKill and config.lootSpot then
+            if BossFarm.Settings.AutoLootOnKill and (config.lootSpot or State.lastBossPosition) then
                 State.isLooting = true
                 Utils.setMode("looting")
                 Utils.log("Boss died, teleporting to loot spot for " .. bossName)
-                Loot.collectNearBoss(bossName, config)
+                
+                -- Dynamic LootSpot Fallback (For Tairock & unconfigured bosses)
+                local lootCfg = config
+                if not config.lootSpot then
+                    lootCfg = {}
+                    for k, v in pairs(config) do lootCfg[k] = v end
+                    lootCfg.lootSpot = State.lastBossPosition
+                end
+                
+                Loot.collectNearBoss(bossName, lootCfg)
                 State.isLooting = false
                 if State.running and not State.hideState.active then
                     Utils.setMode("idle")
@@ -2445,7 +2489,7 @@ function Farm.farmBoss(hum, model, bossName)
             
             local safeSpot = Safety.getSafeSpot() or SECRET_SPOT 
             local pd = Utils.getPlayerData()
-            if pd then pd.rootPart.CFrame = CFrame.new(safeSpot) end
+            if pd then Utils.safeTeleport(CFrame.new(safeSpot)) end
             
             -- Wait until HP is back to 100% (or farm is stopped)
             Utils.log("Waiting for HP to regen to 100%...")
@@ -2521,6 +2565,7 @@ function Farm.stopCurrent()
     if State.anchorConn then State.anchorConn:Disconnect(); State.anchorConn = nil end
     if State.attackThread then pcall(task.cancel, State.attackThread); State.attackThread = nil end
     if State.knockedThread then pcall(task.cancel, State.knockedThread); State.knockedThread = nil end
+    if State.antiSnipePart then pcall(function() State.antiSnipePart:Destroy() end); State.antiSnipePart = nil end
     -- Worker cleanup is split: combat threads stop here, threat workers live under Safety.stopWorkers().
     
     -- Reset per-boss state
