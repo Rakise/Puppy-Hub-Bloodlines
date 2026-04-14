@@ -1019,7 +1019,10 @@ function Knocked.monitor(model)
                 end
                 
                 task.wait(0.5)
-                Farm.stopCurrent()
+                -- Signal death to farmBoss so it handles loot collection properly
+                -- Do NOT call Farm.stopCurrent() here — it resets State.currentBoss
+                -- which causes farmBoss to exit the loop before reaching loot collection
+                State.bossDeathDetected = true
                 return
             end
             task.wait(0.2)
