@@ -1354,7 +1354,7 @@ function Positioning.startAnchoring(model, config)
                 if now - State.lastGroundTouch > 11 then
                     if not State.antiSnipePart then
                         State.antiSnipePart = Instance.new("Part")
-                        State.antiSnipePart.Size = Vector3.new(4, 1, 4)
+                        State.antiSnipePart.Size = Vector3.new(4, 3, 4)
                         State.antiSnipePart.Anchored = true
                         State.antiSnipePart.CanCollide = true
                         State.antiSnipePart.Transparency = 1
@@ -1518,7 +1518,7 @@ function Farm.farmBoss(hum, model, bossName)
     State.currentBoss = bossName
     State.currentModel = model
     State.currentHumanoid = hum
-    State.healthThreshold = pData.humanoid.MaxHealth * 0.5
+    State.healthThreshold = pData.humanoid.MaxHealth * 0.15
     State.bossDeathDetected = false
     State.isLooting = false
     
