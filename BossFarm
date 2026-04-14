@@ -1387,7 +1387,21 @@ function Safety.startWorkers()
             State.hideState.spot = hideSpot
 
             if playerData and hideSpot then
-                playerData.rootPart.CFrame = CFrame.new(hideSpot)
+                local currentPos = playerData.rootPart.Position
+                -- Ignore Y axis to allow gravity to physically drop the character
+                local dist = Vector3.new(currentPos.X - hideSpot.X, 0, currentPos.Z - hideSpot.Z).Magnitude
+                
+                if dist > 30 then
+                    -- Drifting horizontally too far; snap back securely
+                    playerData.rootPart.CFrame = CFrame.new(hideSpot)
+                else
+                    -- Safe zone maintained. Walk naturally to avoid looking frozen.
+                    if not State.hideState.lastWalkTick then State.hideState.lastWalkTick = 0 end
+                    if tick() - State.hideState.lastWalkTick > 2 then
+                        State.hideState.lastWalkTick = tick()
+                        Utils.randomWalkAt(hideSpot, 6)
+                    end
+                end
             end
 
             if hasThreat then
