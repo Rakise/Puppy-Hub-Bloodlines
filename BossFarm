@@ -36,6 +36,8 @@ BossFarm.Settings = {
     SelectedBosses = {},
     ServerHopIfChakraSense = false,
     ServerHopIfNoBoss = false,
+    HideThenHopOnThreat = false,
+    HideThreatTimeout = 30,
     AttackInterval = 0.12,
     HealthCheckInterval = 0.3,
     PlayerDetectionRadius = 300,
@@ -173,6 +175,7 @@ local TRINKET_VALUES = {
 local SECRET_SPOT = Vector3.new(-3933, 1120, -4571)
 local SECRET_SPOT_BACKUP = Vector3.new(-2605.41016, 629.647888, -5373.87207)
 local HYUGA_VOID_SAFE_SPOT = Vector3.new(-700.8, -334.3, -780.8)
+local HYUGA_DANGER_DODGE_SPOT = Vector3.new(-1469.2, -359.9, -9610.4)
 local HAKU_SAFE_SPOT = Vector3.new(-1469.2, 1120, -9610.4)
 
 -- ============================================
@@ -185,11 +188,20 @@ local CHARGE_ANIM_ID = "rbxassetid://9864206537"
 -- ============================================
 local State = {
     running = false,
+    mode = "idle",
+    runId = 0,
+    panicId = 0,
     currentBoss = nil,       -- boss name string
     currentModel = nil,      -- boss Model reference
     currentHumanoid = nil,   -- boss Humanoid reference
     connections = {},
     threads = {},
+    workerConnections = {},
+    workerThreads = {},
+    playerWatchers = {},
+    localCharacterConnections = {},
+    settingsConnections = {},
+    characterBaseParts = {},
     lastBossPosition = nil,
     healthThreshold = 0,
     farmThread = nil,
@@ -223,6 +235,32 @@ local State = {
     isLooting = false,
     -- EVACUATION FLAG: when true, ALL positioning/combat is frozen immediately
     evacuating = false,
+    workersActive = false,
+    serverHopInProgress = false,
+    forcedPosition = nil,
+    hideState = {
+        active = false,
+        spot = nil,
+        reason = nil,
+        startedAt = 0,
+        lastDangerAt = 0,
+        hopDeadline = 0,
+        wasLoop = false,
+        resumeSingle = false,
+        resumeIndex = 0,
+        hopStarted = false,
+    },
+    threatCache = {
+        nearby = false,
+        nearbyPlayer = nil,
+        senseActive = false,
+        sensePlayer = nil,
+        currentBossContested = false,
+        currentBossPlayer = nil,
+        primarySpotContested = false,
+        backupSpotContested = false,
+        updatedAt = 0,
+    },
 }
 
 -- ============================================
@@ -294,6 +332,67 @@ end
 function Utils.addThread(thread)
     table.insert(State.threads, thread)
     return thread
+end
+
+function Utils.addWorkerConnection(conn)
+    table.insert(State.workerConnections, conn)
+    return conn
+end
+
+function Utils.addWorkerThread(thread)
+    table.insert(State.workerThreads, thread)
+    return thread
+end
+
+function Utils.disconnectWorkerConnections()
+    for i = #State.workerConnections, 1, -1 do
+        local conn = State.workerConnections[i]
+        if conn and typeof(conn) == "RBXScriptConnection" then
+            pcall(function() conn:Disconnect() end)
+        end
+        State.workerConnections[i] = nil
+    end
+end
+
+function Utils.cancelWorkerThreads()
+    for i = #State.workerThreads, 1, -1 do
+        if State.workerThreads[i] then
+            pcall(task.cancel, State.workerThreads[i])
+        end
+        State.workerThreads[i] = nil
+    end
+end
+
+function Utils.disconnectConnections(list)
+    for i = #list, 1, -1 do
+        if list[i] and typeof(list[i]) == "RBXScriptConnection" then
+            pcall(function() list[i]:Disconnect() end)
+        end
+        list[i] = nil
+    end
+end
+
+function Utils.removeArrayItem(list, item)
+    for i = #list, 1, -1 do
+        if list[i] == item then
+            table.remove(list, i)
+            return
+        end
+    end
+end
+
+function Utils.rebuildCharacterBaseParts(character)
+    State.characterBaseParts = {}
+    if not character then return end
+    for _, descendant in ipairs(character:GetDescendants()) do
+        if descendant:IsA("BasePart") then
+            table.insert(State.characterBaseParts, descendant)
+        end
+    end
+end
+
+function Utils.setMode(mode)
+    State.mode = mode
 end
 
 -- Simulate natural player movement near a position (anti-detection)
@@ -687,6 +786,679 @@ function Safety.evacuateAndHide(reason)
 end
 
 -- ============================================
+-- SAFETY RUNTIME OVERRIDES (Frame-Level Panic + Cached Watchers)
+-- ============================================
+local BossLoop
+local HIDE_RESUME_CLEAR_TIME = 0.35
+local HAKU_FORCE_PRIORITY = 80
+local HYUGA_DODGE_PRIORITY = 70
+local GENERIC_DODGE_PRIORITY = 40
+
+local function newHideState()
+    return {
+        active = false,
+        spot = nil,
+        reason = nil,
+        startedAt = 0,
+        lastDangerAt = 0,
+        hopDeadline = 0,
+        wasLoop = false,
+        resumeSingle = false,
+        resumeIndex = 0,
+        hopStarted = false,
+    }
+end
+
+local function newThreatCache()
+    return {
+        nearby = false,
+        nearbyPlayer = nil,
+        senseActive = false,
+        sensePlayer = nil,
+        currentBossContested = false,
+        currentBossPlayer = nil,
+        primarySpotContested = false,
+        backupSpotContested = false,
+        updatedAt = 0,
+    }
+end
+
+local function isReasonablePosition(position)
+    return position
+        and math.abs(position.X) <= 1e6
+        and math.abs(position.Y) <= 1e6
+        and math.abs(position.Z) <= 1e6
+end
+
+function Safety.hasSenseKeyword(value)
+    return type(value) == "string" and string.find(string.lower(value), "sense") ~= nil
+end
+
+function Safety.containerHasSenseTool(container)
+    if not container then return false end
+    for _, child in ipairs(container:GetChildren()) do
+        if child:IsA("Tool") and Safety.hasSenseKeyword(child.Name) then
+            return true
+        end
+    end
+    return false
+end
+
+function Safety.isWithinRange(targetPosition, centerPosition, radius, verticalTolerance)
+    radius = radius or BossFarm.Settings.PlayerDetectionRadius
+    verticalTolerance = verticalTolerance or BossFarm.Settings.PlayerVerticalTolerance
+
+    local horizontalTarget = Vector3.new(targetPosition.X, 0, targetPosition.Z)
+    local horizontalCenter = Vector3.new(centerPosition.X, 0, centerPosition.Z)
+    local horizontalDist = (horizontalTarget - horizontalCenter).Magnitude
+    local verticalDist = math.abs(targetPosition.Y - centerPosition.Y)
+    return horizontalDist <= radius and verticalDist <= verticalTolerance, horizontalDist, verticalDist
+end
+
+function Safety.refreshWatcherSense(watcher)
+    watcher.senseActive = Safety.hasSenseKeyword(watcher.currentSkill)
+        or watcher.characterToolSense == true
+        or watcher.backpackToolSense == true
+end
+
+function Safety.bindWatcherCharacter(watcher, character)
+    Utils.disconnectConnections(watcher.characterConnections)
+    watcher.character = character
+    watcher.root = nil
+    watcher.humanoid = nil
+    watcher.characterToolSense = false
+
+    if not character then
+        Safety.refreshWatcherSense(watcher)
+        return
+    end
+
+    local function refreshCharacterState()
+        watcher.character = character
+        watcher.root = Safety.getCharacterRoot(character)
+        watcher.humanoid = character:FindFirstChildOfClass("Humanoid")
+        watcher.characterToolSense = Safety.containerHasSenseTool(character)
+        Safety.refreshWatcherSense(watcher)
+    end
+
+    refreshCharacterState()
+    table.insert(watcher.characterConnections, character.ChildAdded:Connect(refreshCharacterState))
+    table.insert(watcher.characterConnections, character.ChildRemoved:Connect(refreshCharacterState))
+    table.insert(watcher.characterConnections, character.AncestryChanged:Connect(function(_, parent)
+        if not parent then
+            watcher.character = nil
+            watcher.root = nil
+            watcher.humanoid = nil
+            watcher.characterToolSense = false
+            Safety.refreshWatcherSense(watcher)
+        end
+    end))
+end
+
+function Safety.bindWatcherBackpack(watcher, backpack)
+    Utils.disconnectConnections(watcher.backpackConnections)
+    watcher.backpack = backpack
+    watcher.backpackToolSense = false
+
+    if not backpack then
+        Safety.refreshWatcherSense(watcher)
+        return
+    end
+
+    local function refreshBackpackState()
+        watcher.backpack = backpack
+        watcher.backpackToolSense = Safety.containerHasSenseTool(backpack)
+        Safety.refreshWatcherSense(watcher)
+    end
+
+    refreshBackpackState()
+    table.insert(watcher.backpackConnections, backpack.ChildAdded:Connect(refreshBackpackState))
+    table.insert(watcher.backpackConnections, backpack.ChildRemoved:Connect(refreshBackpackState))
+end
+
+function Safety.bindWatcherSettings(watcher)
+    Utils.disconnectConnections(watcher.settingConnections)
+    Utils.disconnectConnections(watcher.settingValueConnections)
+    watcher.currentSkill = nil
+
+    local settingsFolder = State.settingsFolder
+    local playerSettings = settingsFolder and settingsFolder:FindFirstChild(watcher.player.Name)
+    if not playerSettings then
+        Safety.refreshWatcherSense(watcher)
+        return
+    end
+
+    local function bindCurrentSkill()
+        Utils.disconnectConnections(watcher.settingValueConnections)
+        local sVal = playerSettings:FindFirstChild("CurrentSkill")
+        watcher.currentSkill = sVal and tostring(sVal.Value) or nil
+        if sVal then
+            table.insert(watcher.settingValueConnections, sVal:GetPropertyChangedSignal("Value"):Connect(function()
+                watcher.currentSkill = tostring(sVal.Value)
+                Safety.refreshWatcherSense(watcher)
+            end))
+        end
+        Safety.refreshWatcherSense(watcher)
+    end
+
+    bindCurrentSkill()
+    table.insert(watcher.settingConnections, playerSettings.ChildAdded:Connect(function(child)
+        if child.Name == "CurrentSkill" then
+            bindCurrentSkill()
+        end
+    end))
+    table.insert(watcher.settingConnections, playerSettings.ChildRemoved:Connect(function(child)
+        if child.Name == "CurrentSkill" then
+            bindCurrentSkill()
+        end
+    end))
+end
+
+function Safety.destroyPlayerWatcher(player)
+    local watcher = State.playerWatchers[player]
+    if not watcher then return end
+
+    Utils.disconnectConnections(watcher.connections)
+    Utils.disconnectConnections(watcher.characterConnections)
+    Utils.disconnectConnections(watcher.backpackConnections)
+    Utils.disconnectConnections(watcher.settingConnections)
+    Utils.disconnectConnections(watcher.settingValueConnections)
+    State.playerWatchers[player] = nil
+end
+
+function Safety.ensurePlayerWatcher(player)
+    if not player or player == LocalPlayer or State.playerWatchers[player] then
+        return
+    end
+
+    local watcher = {
+        player = player,
+        connections = {},
+        characterConnections = {},
+        backpackConnections = {},
+        settingConnections = {},
+        settingValueConnections = {},
+        character = nil,
+        humanoid = nil,
+        root = nil,
+        currentSkill = nil,
+        characterToolSense = false,
+        backpackToolSense = false,
+        senseActive = false,
+    }
+    State.playerWatchers[player] = watcher
+
+    Safety.bindWatcherCharacter(watcher, player.Character)
+    Safety.bindWatcherBackpack(watcher, player:FindFirstChildOfClass("Backpack"))
+    Safety.bindWatcherSettings(watcher)
+
+    table.insert(watcher.connections, player.CharacterAdded:Connect(function(character)
+        Safety.bindWatcherCharacter(watcher, character)
+    end))
+    table.insert(watcher.connections, player.CharacterRemoving:Connect(function()
+        Safety.bindWatcherCharacter(watcher, nil)
+    end))
+    table.insert(watcher.connections, player.ChildAdded:Connect(function(child)
+        if child:IsA("Backpack") then
+            Safety.bindWatcherBackpack(watcher, child)
+        end
+    end))
+    table.insert(watcher.connections, player.ChildRemoved:Connect(function(child)
+        if child:IsA("Backpack") then
+            Safety.bindWatcherBackpack(watcher, nil)
+        end
+    end))
+end
+
+function Safety.refreshSettingsFolder()
+    Utils.disconnectConnections(State.settingsConnections)
+    State.settingsFolder = ReplicatedStorage:FindFirstChild("Settings")
+
+    table.insert(State.settingsConnections, ReplicatedStorage.ChildAdded:Connect(function(child)
+        if child.Name == "Settings" then
+            Safety.refreshSettingsFolder()
+        end
+    end))
+    table.insert(State.settingsConnections, ReplicatedStorage.ChildRemoved:Connect(function(child)
+        if child.Name == "Settings" then
+            Safety.refreshSettingsFolder()
+        end
+    end))
+
+    if State.settingsFolder then
+        table.insert(State.settingsConnections, State.settingsFolder.ChildAdded:Connect(function()
+            for _, watcher in pairs(State.playerWatchers) do
+                Safety.bindWatcherSettings(watcher)
+            end
+        end))
+        table.insert(State.settingsConnections, State.settingsFolder.ChildRemoved:Connect(function()
+            for _, watcher in pairs(State.playerWatchers) do
+                Safety.bindWatcherSettings(watcher)
+            end
+        end))
+    end
+
+    for _, watcher in pairs(State.playerWatchers) do
+        Safety.bindWatcherSettings(watcher)
+    end
+end
+
+function Safety.startLocalCharacterWatcher()
+    Utils.disconnectConnections(State.localCharacterConnections)
+    State.localCharacterDescendantConnections = State.localCharacterDescendantConnections or {}
+    Utils.disconnectConnections(State.localCharacterDescendantConnections)
+
+    local function bindLocalCharacter(character)
+        Utils.disconnectConnections(State.localCharacterDescendantConnections)
+        Utils.rebuildCharacterBaseParts(character)
+        if not character then return end
+
+        table.insert(State.localCharacterDescendantConnections, character.DescendantAdded:Connect(function(descendant)
+            if descendant:IsA("BasePart") then
+                table.insert(State.characterBaseParts, descendant)
+            end
+        end))
+        table.insert(State.localCharacterDescendantConnections, character.DescendantRemoving:Connect(function(descendant)
+            if descendant:IsA("BasePart") then
+                Utils.removeArrayItem(State.characterBaseParts, descendant)
+            end
+        end))
+    end
+
+    bindLocalCharacter(LocalPlayer.Character)
+    table.insert(State.localCharacterConnections, LocalPlayer.CharacterAdded:Connect(bindLocalCharacter))
+    table.insert(State.localCharacterConnections, LocalPlayer.CharacterRemoving:Connect(function()
+        Utils.disconnectConnections(State.localCharacterDescendantConnections)
+        Utils.rebuildCharacterBaseParts(nil)
+    end))
+end
+
+function Safety.isWatcherValid(watcher)
+    if not watcher or not watcher.character or not watcher.character.Parent then
+        return false
+    end
+    if not watcher.humanoid or watcher.humanoid.Health <= 0 then
+        return false
+    end
+    if not watcher.root or not watcher.root.Parent then
+        return false
+    end
+    if not isReasonablePosition(watcher.root.Position) then
+        return false
+    end
+    return true, watcher.root
+end
+
+function Safety.isPlayerNearPosition(position, radius, verticalTolerance)
+    local nearestName = nil
+    local nearestDistance = math.huge
+
+    for _, watcher in pairs(State.playerWatchers) do
+        local valid, root = Safety.isWatcherValid(watcher)
+        if valid then
+            local isNear, horizontalDist = Safety.isWithinRange(root.Position, position, radius, verticalTolerance)
+            if isNear and horizontalDist < nearestDistance then
+                nearestDistance = horizontalDist
+                nearestName = watcher.player.Name
+            end
+        end
+    end
+
+    return nearestName ~= nil, nearestName
+end
+
+function Safety.isBossContested(model, radius)
+    local bossRoot = Utils.getBossRoot(model)
+    if not bossRoot then return false end
+    return Safety.isPlayerNearPosition(bossRoot.Position, radius)
+end
+
+function Safety.isChakraSenseActive()
+    if not BossFarm.Settings.ServerHopIfChakraSense then
+        return false
+    end
+
+    if State.threatCache.senseActive then
+        return true, State.threatCache.sensePlayer
+    end
+
+    for _, watcher in pairs(State.playerWatchers) do
+        if watcher.senseActive then
+            return true, watcher.player.Name
+        end
+    end
+    return false
+end
+
+function Safety.updateThreatCache()
+    local cache = newThreatCache()
+    local playerData = Utils.getPlayerData()
+    local myPosition = playerData and playerData.rootPart.Position or nil
+    local bossRoot = Utils.getBossRoot(State.currentModel)
+
+    local nearestPlayerDistance = math.huge
+    local nearestBossDistance = math.huge
+
+    for _, watcher in pairs(State.playerWatchers) do
+        local valid, root = Safety.isWatcherValid(watcher)
+        if valid then
+            local rootPosition = root.Position
+
+            if watcher.senseActive and not cache.senseActive then
+                cache.senseActive = true
+                cache.sensePlayer = watcher.player.Name
+            end
+
+            if myPosition then
+                local nearMe, horizontalDist = Safety.isWithinRange(rootPosition, myPosition)
+                if nearMe and horizontalDist < nearestPlayerDistance then
+                    nearestPlayerDistance = horizontalDist
+                    cache.nearby = true
+                    cache.nearbyPlayer = watcher.player.Name
+                end
+            end
+
+            if bossRoot then
+                local nearBoss, bossDist = Safety.isWithinRange(rootPosition, bossRoot.Position)
+                if nearBoss and bossDist < nearestBossDistance then
+                    nearestBossDistance = bossDist
+                    cache.currentBossContested = true
+                    cache.currentBossPlayer = watcher.player.Name
+                end
+            end
+
+            if not cache.primarySpotContested and Safety.isWithinRange(rootPosition, SECRET_SPOT) then
+                cache.primarySpotContested = true
+            end
+            if not cache.backupSpotContested and Safety.isWithinRange(rootPosition, SECRET_SPOT_BACKUP) then
+                cache.backupSpotContested = true
+            end
+        end
+    end
+
+    cache.updatedAt = tick()
+    State.threatCache = cache
+end
+
+function Safety.getSafeSpot()
+    local playerData = Utils.getPlayerData()
+    local cache = State.threatCache
+
+    if State.hideState.active and State.hideState.spot then
+        return State.hideState.spot
+    end
+
+    if playerData then
+        if (playerData.rootPart.Position - SECRET_SPOT).Magnitude < 50 then
+            return SECRET_SPOT
+        end
+        if (playerData.rootPart.Position - SECRET_SPOT_BACKUP).Magnitude < 50 then
+            return SECRET_SPOT_BACKUP
+        end
+    end
+
+    if not cache.primarySpotContested then
+        return SECRET_SPOT
+    end
+    if not cache.backupSpotContested then
+        return SECRET_SPOT_BACKUP
+    end
+
+    return SECRET_SPOT
+end
+
+function Safety.getThreatReason()
+    local cache = State.threatCache
+    if BossFarm.Settings.ServerHopIfChakraSense and cache.senseActive then
+        return true, "Chakra Sense (" .. tostring(cache.sensePlayer or "?") .. ")"
+    end
+    if cache.nearby then
+        return true, "Player Nearby (" .. tostring(cache.nearbyPlayer or "?") .. ")"
+    end
+    if cache.currentBossContested then
+        return true, "Boss Contested (" .. tostring(cache.currentBossPlayer or "?") .. ")"
+    end
+    return false, nil
+end
+
+function Safety.clearForcedPosition()
+    State.forcedPosition = nil
+    if State.mode == "dodging" then
+        if State.running and State.currentBoss and not State.hideState.active then
+            Utils.setMode("engaging")
+        else
+            Utils.setMode("idle")
+        end
+    end
+end
+
+function Safety.getForcedPosition()
+    local forced = State.forcedPosition
+    if not forced then return nil end
+
+    if forced.expiresAt ~= 0 and tick() >= forced.expiresAt then
+        Safety.clearForcedPosition()
+        return nil
+    end
+
+    return forced
+end
+
+function Safety.setForcedPosition(position, duration, priority, reason)
+    if not position then return end
+
+    priority = priority or 0
+    local current = Safety.getForcedPosition()
+    if current and current.priority and current.priority > priority then
+        return
+    end
+
+    State.forcedPosition = {
+        position = position,
+        expiresAt = (duration and duration > 0) and (tick() + duration) or 0,
+        priority = priority,
+        reason = reason,
+    }
+
+    if not State.hideState.active and State.mode ~= "hopping" and State.mode ~= "regen" and State.mode ~= "looting" then
+        Utils.setMode("dodging")
+    end
+end
+
+function Safety.pauseForThreat()
+    State.panicId = State.panicId + 1
+    State.runId = State.runId + 1
+    State.running = false
+    State.evacuating = true
+    State.isLooting = false
+    Charging.stop()
+    Farm.stopCurrent()
+    if State.farmThread then pcall(task.cancel, State.farmThread); State.farmThread = nil end
+    if State.bossLoopThread then pcall(task.cancel, State.bossLoopThread); State.bossLoopThread = nil end
+end
+
+function Safety.startHop(reason)
+    if State.serverHopInProgress then return end
+
+    State.serverHopInProgress = true
+    State.hideState.hopStarted = true
+    Utils.setMode("hopping")
+    Utils.log("Evacuating: " .. tostring(reason))
+    Utils.notify("Evacuating: " .. tostring(reason), 5)
+    Webhook.send("⚠️ Evacuating & Hopping", reason or "Unknown danger", 15158332)
+    ServerHop.execute(true)
+end
+
+function Safety.enterHide(reason)
+    local now = tick()
+
+    if State.hideState.active then
+        State.hideState.reason = reason or State.hideState.reason
+        State.hideState.lastDangerAt = now
+        if BossFarm.Settings.HideThenHopOnThreat then
+            Safety.startHop(reason or State.hideState.reason)
+        end
+        return
+    end
+
+    local wasLoop = BossFarm.Settings.BossLoopEnabled == true
+    local resumeSingle = BossFarm.Settings.Enabled == true and not wasLoop
+    local resumeIndex = State.bossLoopIndex or 0
+
+    Safety.pauseForThreat()
+
+    State.hideState = {
+        active = true,
+        spot = Safety.getSafeSpot(),
+        reason = reason,
+        startedAt = now,
+        lastDangerAt = now,
+        hopDeadline = now + (BossFarm.Settings.HideThreatTimeout or 30),
+        wasLoop = wasLoop,
+        resumeSingle = resumeSingle,
+        resumeIndex = resumeIndex,
+        hopStarted = false,
+    }
+
+    Utils.setMode("hiding")
+    Utils.log("Hiding: " .. tostring(reason))
+    Utils.notify("Hiding at Safe Spot...", 4)
+
+    if BossFarm.Settings.HideThenHopOnThreat then
+        Safety.startHop(reason)
+    end
+end
+
+function Safety.resumeAfterHide()
+    if State.serverHopInProgress then return end
+
+    local hideState = State.hideState
+    State.hideState = newHideState()
+    State.evacuating = false
+    State.running = false
+    Safety.clearForcedPosition()
+    Utils.setMode("idle")
+
+    if hideState.wasLoop and BossFarm.Settings.BossLoopEnabled then
+        State.bossLoopIndex = hideState.resumeIndex or 0
+        Utils.notify("Coast is clear! Resuming Loop...", 4)
+        BossLoop.start()
+    elseif hideState.resumeSingle and BossFarm.Settings.Enabled then
+        Utils.notify("Coast is clear! Resuming Farm...", 4)
+        Farm.start()
+    end
+end
+
+function Safety.startWorkers()
+    if State.workersActive then return end
+
+    State.workersActive = true
+    State.threatCache = newThreatCache()
+    State.serverHopInProgress = false
+
+    Safety.startLocalCharacterWatcher()
+    for _, player in ipairs(Players:GetPlayers()) do
+        Safety.ensurePlayerWatcher(player)
+    end
+    Safety.refreshSettingsFolder()
+
+    Utils.addWorkerConnection(Players.PlayerAdded:Connect(function(player)
+        Safety.ensurePlayerWatcher(player)
+    end))
+    Utils.addWorkerConnection(Players.PlayerRemoving:Connect(function(player)
+        Safety.destroyPlayerWatcher(player)
+    end))
+
+    Utils.addWorkerThread(task.spawn(function()
+        while State.workersActive do
+            Safety.updateThreatCache()
+            task.wait()
+        end
+    end))
+
+    Utils.addWorkerConnection(RunService.Heartbeat:Connect(function()
+        local forced = Safety.getForcedPosition()
+        local hasThreat, threatReason = Safety.getThreatReason()
+
+        if State.hideState.active then
+            local playerData = Utils.getPlayerData()
+            local hideSpot = Safety.getSafeSpot()
+            State.hideState.spot = hideSpot
+
+            if playerData and hideSpot then
+                playerData.rootPart.CFrame = CFrame.new(hideSpot)
+            end
+
+            if hasThreat then
+                State.hideState.lastDangerAt = tick()
+            end
+
+            if not State.hideState.hopStarted then
+                if BossFarm.Settings.HideThenHopOnThreat then
+                    Safety.startHop(State.hideState.reason or threatReason)
+                elseif hasThreat and tick() >= State.hideState.hopDeadline then
+                    Safety.startHop("Danger > " .. tostring(BossFarm.Settings.HideThreatTimeout or 30) .. "s (" .. tostring(threatReason or State.hideState.reason or "Unknown") .. ")")
+                elseif not hasThreat and tick() - State.hideState.lastDangerAt >= HIDE_RESUME_CLEAR_TIME then
+                    Safety.resumeAfterHide()
+                end
+            end
+            return
+        end
+
+        if hasThreat and (State.running or BossFarm.Settings.Enabled or BossFarm.Settings.BossLoopEnabled) and State.mode ~= "hopping" then
+            Safety.enterHide(threatReason)
+            return
+        end
+
+        if forced and not State.hideState.active and State.mode ~= "hopping" then
+            local playerData = Utils.getPlayerData()
+            if playerData then
+                playerData.rootPart.CFrame = CFrame.new(forced.position)
+            end
+        end
+    end))
+end
+
+function Safety.stopWorkers()
+    State.workersActive = false
+    Utils.disconnectWorkerConnections()
+    Utils.cancelWorkerThreads()
+    Utils.disconnectConnections(State.localCharacterConnections)
+    State.localCharacterDescendantConnections = State.localCharacterDescendantConnections or {}
+    Utils.disconnectConnections(State.localCharacterDescendantConnections)
+    Utils.disconnectConnections(State.settingsConnections)
+
+    local playersToClear = {}
+    for player in pairs(State.playerWatchers) do
+        table.insert(playersToClear, player)
+    end
+    for _, player in ipairs(playersToClear) do
+        Safety.destroyPlayerWatcher(player)
+    end
+
+    State.playerWatchers = {}
+    State.characterBaseParts = {}
+    State.hideState = newHideState()
+    State.threatCache = newThreatCache()
+    State.serverHopInProgress = false
+    State.workersActive = false
+    Safety.clearForcedPosition()
+end
+
+function Safety.startMonitor()
+    Safety.startWorkers()
+end
+
+function Safety.evacuateAndHop(reason)
+    Safety.enterHide(reason)
+    Safety.startHop(reason)
+end
+
+function Safety.evacuateAndHide(reason)
+    Safety.enterHide(reason)
+end
+
+-- ============================================
 -- BOSS DETECTION
 -- ============================================
 local Detection = {}
@@ -737,11 +1509,7 @@ function Detection.triggerSpawnIfNeeded(bossName, config)
     if targetPos then
         local contested, nearPlayer = Safety.isPlayerNearPosition(targetPos, BossFarm.Settings.PlayerDetectionRadius)
         if contested then
-            if BossFarm.Settings.ServerHopIfChakraSense then
-                Safety.evacuateAndHop("Players at " .. bossName .. " spawn! (" .. tostring(nearPlayer) .. ")")
-            else
-                Safety.evacuateAndHide("Players at " .. bossName .. " spawn! (" .. tostring(nearPlayer) .. ")")
-            end
+            Safety.evacuateAndHide("Players at " .. bossName .. " spawn! (" .. tostring(nearPlayer) .. ")")
             return false
         end
         
@@ -787,16 +1555,20 @@ function AnimMonitors.setupGeneric(model, config)
         if not State.running then return end
         local assetId = track.Animation.AnimationId:match("rbxassetid://(%d+)") or track.Animation.AnimationId
         if config.dangerousAnimations[assetId] then
-            local boost = config.safeHeightBoost or 15
-            State.bossHeightBoost = boost
-            State.inDanger = true
-            
-            Utils.addThread(task.spawn(function()
-                while track and track.IsPlaying and State.running do task.wait(0.1) end
-                task.wait(0.5)
-                State.bossHeightBoost = 0
-                State.inDanger = false
-            end))
+            if config.animationResponse == "teleport" and config.safePosition then
+                Safety.setForcedPosition(config.safePosition, 1.25, GENERIC_DODGE_PRIORITY, tostring(model.Name) .. " danger")
+            else
+                local boost = config.safeHeightBoost or 15
+                State.bossHeightBoost = boost
+                State.inDanger = true
+                
+                Utils.addThread(task.spawn(function()
+                    while track and track.IsPlaying and State.running do task.wait(0.1) end
+                    task.wait(0.5)
+                    State.bossHeightBoost = 0
+                    State.inDanger = false
+                end))
+            end
         end
     end))
 end
@@ -844,11 +1616,15 @@ function AnimMonitors.setupHyuga(model)
         if not State.running then return end
         local assetId = track.Animation.AnimationId:match("rbxassetid://(%d+)") or track.Animation.AnimationId
         if dangerAnims[assetId] then
-            State.bossHeightBoost = 20
+            local currentRunId = State.runId
             Utils.addThread(task.spawn(function()
-                while track and track.IsPlaying and State.running do task.wait(0.1) end
-                task.wait(0.5)
-                State.bossHeightBoost = 0
+                while track and track.IsPlaying and State.running and State.runId == currentRunId and State.currentBoss == "Hyuga Boss" do
+                    Safety.setForcedPosition(HYUGA_DANGER_DODGE_SPOT, 0.2, HYUGA_DODGE_PRIORITY, "Hyuga danger")
+                    task.wait()
+                end
+                if State.runId == currentRunId then
+                    Safety.setForcedPosition(HYUGA_DANGER_DODGE_SPOT, 0.35, HYUGA_DODGE_PRIORITY, "Hyuga danger")
+                end
             end))
         end
     end))
@@ -867,12 +1643,9 @@ function AnimMonitors.setupHaku()
             end
             
             if dur then
-                local pData = Utils.getPlayerData()
-                if pData then
-                    pData.rootPart.CFrame = CFrame.new(HAKU_SAFE_SPOT)
-                    State.hakuSafeSpot = true
-                    State.hakuSafeSpotEndTime = tick() + dur
-                end
+                State.hakuSafeSpot = true
+                State.hakuSafeSpotEndTime = tick() + dur
+                Safety.setForcedPosition(HAKU_SAFE_SPOT, dur + 0.15, HAKU_FORCE_PRIORITY, "Haku danger")
             end
         end))
     end
@@ -918,6 +1691,7 @@ function AnimMonitors.setup(model, bossName, config)
     State.bossHeightBoost = 0
     State.hyugaInVoid = false
     State.hakuSafeSpot = false
+    Safety.clearForcedPosition()
     
     if bossName == "Hyuga Boss" then
         AnimMonitors.setupHyuga(model)
@@ -992,8 +1766,9 @@ function Knocked.monitor(model)
     local knocked = settings:FindFirstChild("Knocked")
     if not knocked then return end
     
+    local currentRunId = State.runId
     State.knockedThread = task.spawn(function()
-        while State.running and model and model.Parent do
+        while State.running and model and model.Parent and State.runId == currentRunId do
             local isKnocked = false
             pcall(function()
                 if knocked.Value == true
@@ -1153,7 +1928,6 @@ function Loot.collectNearBoss(bossName, config)
                 local dist = (cpd.rootPart.Position - safeSpot).Magnitude
                 if dist > 30 then cpd.rootPart.CFrame = CFrame.new(safeSpot) end
             end
-            Utils.randomWalkAt(safeSpot, 6)
             
             local stillSense = Safety.isChakraSenseActive()
             local stillContested = Safety.isPlayerNearPosition(lootSpot, BossFarm.Settings.PlayerDetectionRadius)
@@ -1347,11 +2121,12 @@ end
 local Combat = {}
 
 function Combat.startAttacking(model)
+    local currentRunId = State.runId
     State.attackThread = task.spawn(function()
         local dataEvent = GetDataEvent()
-        while State.running and State.currentBoss and not State.evacuating do
-            if State.hyugaInVoid or State.hakuSafeSpot then
-                task.wait(0.2)
+        while State.running and State.currentBoss and not State.evacuating and State.runId == currentRunId do
+            if State.mode ~= "engaging" or State.hyugaInVoid or Safety.getForcedPosition() then
+                task.wait(0.05)
                 continue
             end
             
@@ -1375,10 +2150,13 @@ end
 function Combat.enableNoclip()
     Utils.addConnection(RunService.Stepped:Connect(function()
         if not State.running or State.evacuating then return end
-        local pData = Utils.getPlayerData()
-        if not pData then return end
-        for _, part in pairs(pData.character:GetDescendants()) do
-            if part:IsA('BasePart') then part.CanCollide = false end
+        for i = #State.characterBaseParts, 1, -1 do
+            local part = State.characterBaseParts[i]
+            if not part or not part.Parent then
+                table.remove(State.characterBaseParts, i)
+            else
+                part.CanCollide = false
+            end
         end
     end))
 end
@@ -1394,6 +2172,7 @@ function Positioning.startAnchoring(model, config)
             -- ABSOLUTE SAFETY: if evacuating, do NOTHING
             if State.evacuating then return end
             if not State.running then return end
+            if State.mode == "hiding" or State.mode == "hopping" then return end
             
             -- If we're currently looting, don't reposition
             if State.isLooting then return end
@@ -1411,18 +2190,17 @@ function Positioning.startAnchoring(model, config)
             
             local pData = Utils.getPlayerData()
             if not pData then return end
-            
-            -- Haku safe spot timer check
-            if State.hakuSafeSpot and tick() >= State.hakuSafeSpotEndTime then
-                State.hakuSafeSpot = false
-            end
-            
+
             -- Position logic
             if State.hyugaInVoid then
                 pData.rootPart.CFrame = CFrame.new(HYUGA_VOID_SAFE_SPOT)
-            elseif State.hakuSafeSpot then
-                pData.rootPart.CFrame = CFrame.new(HAKU_SAFE_SPOT)
             else
+                local forced = Safety.getForcedPosition()
+                if forced then
+                    pData.rootPart.CFrame = CFrame.new(forced.position)
+                    return
+                end
+
                 local totalHeight = (config.height or 15)
                     + State.weaponHeightBoost
                 
@@ -1440,29 +2218,6 @@ function Positioning.startAnchoring(model, config)
                         bossRoot.Position + Vector3.new(0, yOffset, 0),
                         bossRoot.Position
                     )
-                end
-                
-                -- Anti-Snipe System (spawn invisible platform beneath feet to reset fall duration flag)
-                local now = tick()
-                if not State.lastGroundTouch then State.lastGroundTouch = now end
-                if now - State.lastGroundTouch > 11 then
-                    if not State.antiSnipePart then
-                        State.antiSnipePart = Instance.new("Part")
-                        State.antiSnipePart.Size = Vector3.new(4, 3, 4)
-                        State.antiSnipePart.Anchored = true
-                        State.antiSnipePart.CanCollide = true
-                        State.antiSnipePart.Transparency = 1
-                        State.antiSnipePart.Parent = workspace
-                    end
-                    State.antiSnipePart.CFrame = pData.rootPart.CFrame * CFrame.new(0, -3.2, 0)
-                    
-                    if now - State.lastGroundTouch > 11.5 then
-                        State.lastGroundTouch = now
-                        if State.antiSnipePart then
-                            pcall(function() State.antiSnipePart:Destroy() end)
-                            State.antiSnipePart = nil
-                        end
-                    end
                 end
             end
         end)
@@ -1597,18 +2352,14 @@ function Farm.farmBoss(hum, model, bossName)
     local senseActive, sensePlayer = Safety.isChakraSenseActive()
     if senseActive then
         Utils.log("Pre-engagement: Chakra Sense active (" .. tostring(sensePlayer) .. "), aborting!")
-        if BossFarm.Settings.ServerHopIfChakraSense then
-            Safety.evacuateAndHop("Chakra Sense (pre-engage: " .. tostring(sensePlayer) .. ")")
-        else
-            Safety.evacuateAndHide("Chakra Sense (pre-engage: " .. tostring(sensePlayer) .. ")")
-        end
+        Safety.evacuateAndHide("Chakra Sense (pre-engage: " .. tostring(sensePlayer) .. ")")
         return
     end
     
     State.currentBoss = bossName
     State.currentModel = model
     State.currentHumanoid = hum
-    State.healthThreshold = pData.humanoid.MaxHealth * 0.15
+    State.healthThreshold = pData.humanoid.MaxHealth * 0.5
     State.bossDeathDetected = false
     State.isLooting = false
     
@@ -1624,6 +2375,7 @@ function Farm.farmBoss(hum, model, bossName)
     -- Start charging for bonus damage
     task.wait(0.5)
     Charging.start()
+    Utils.setMode("engaging")
     
     Utils.notify("Farming: " .. bossName, 3)
     
@@ -1633,8 +2385,6 @@ function Farm.farmBoss(hum, model, bossName)
     Combat.startAttacking(model)
     
     -- Health + safety monitor loop
-    local lastPlayerCheck = tick()
-    local lastChakraCheck = tick()
     while State.running and not State.evacuating and State.currentBoss == bossName do
         local cPData = Utils.getPlayerData()
         if not cPData then break end
@@ -1661,9 +2411,13 @@ function Farm.farmBoss(hum, model, bossName)
             -- Loot collection: set flag to prevent anchor from repositioning us
             if BossFarm.Settings.AutoLootOnKill and config.lootSpot then
                 State.isLooting = true
+                Utils.setMode("looting")
                 Utils.log("Boss died, teleporting to loot spot for " .. bossName)
                 Loot.collectNearBoss(bossName, config)
                 State.isLooting = false
+                if State.running and not State.hideState.active then
+                    Utils.setMode("idle")
+                end
             end
             break
         end
@@ -1672,6 +2426,7 @@ function Farm.farmBoss(hum, model, bossName)
         if cPData.humanoid.Health < State.healthThreshold then
             Utils.notify("Health low! Retreating to regen...", 3)
             Farm.stopCurrent()
+            Utils.setMode("regen")
             
             local safeSpot = Safety.getSafeSpot() or SECRET_SPOT 
             local pd = Utils.getPlayerData()
@@ -1687,9 +2442,6 @@ function Farm.farmBoss(hum, model, bossName)
                 local dist = (regenData.rootPart.Position - safeSpot).Magnitude
                 if dist > 30 then
                     regenData.rootPart.CFrame = CFrame.new(safeSpot)
-                else
-                    -- Walk randomly at safe spot (looks natural if a mod is watching)
-                    Utils.randomWalkAt(safeSpot, 6)
                 end
                 
                 if regenData.humanoid.Health >= regenData.humanoid.MaxHealth then
@@ -1698,18 +2450,7 @@ function Farm.farmBoss(hum, model, bossName)
                     break
                 end
                 
-                -- Safety checks during regen
-                local senseActive, sensePlayer = Safety.isChakraSenseActive()
-                if senseActive then
-                    if BossFarm.Settings.ServerHopIfChakraSense then
-                        Safety.evacuateAndHop("Chakra Sense (" .. sensePlayer .. ") while regen!")
-                    else
-                        Safety.evacuateAndHide("Chakra Sense (" .. sensePlayer .. ") while regen!")
-                    end
-                    return
-                end
-                
-                task.wait(math.random(10, 20) / 10) -- Randomized wait looks more natural
+                task.wait(BossFarm.Settings.HealthCheckInterval)
             end
             
             -- After regen, DON'T break — re-enter the loop to re-engage the SAME boss
@@ -1738,6 +2479,7 @@ function Farm.farmBoss(hum, model, bossName)
                     Combat.enableNoclip()
                     Positioning.startAnchoring(model, config)
                     Combat.startAttacking(model)
+                    Utils.setMode("engaging")
                     Utils.notify("Re-engaging: " .. bossName, 2)
                 else
                     Utils.notify(bossName .. " despawned during regen.", 2)
@@ -1751,20 +2493,6 @@ function Farm.farmBoss(hum, model, bossName)
             continue
         end
         
-        -- Periodic player proximity check
-        if tick() - lastPlayerCheck >= 2 then
-            lastPlayerCheck = tick()
-            local contested, nearPlayer = Safety.isBossContested(model, BossFarm.Settings.PlayerDetectionRadius)
-            if contested then
-                if BossFarm.Settings.ServerHopIfChakraSense then
-                    Safety.evacuateAndHop("Players nearby! (" .. tostring(nearPlayer) .. ")")
-                else
-                    Safety.evacuateAndHide("Players nearby! (" .. tostring(nearPlayer) .. ")")
-                end
-                return
-            end
-        end
-        
         task.wait(BossFarm.Settings.HealthCheckInterval)
     end
 end
@@ -1775,7 +2503,7 @@ function Farm.stopCurrent()
     if State.anchorConn then State.anchorConn:Disconnect(); State.anchorConn = nil end
     if State.attackThread then pcall(task.cancel, State.attackThread); State.attackThread = nil end
     if State.knockedThread then pcall(task.cancel, State.knockedThread); State.knockedThread = nil end
-    -- NOTE: Don't cancel dangerMonitorThread here — it's managed by evacuate functions
+    -- Worker cleanup is split: combat threads stop here, threat workers live under Safety.stopWorkers().
     
     -- Reset per-boss state
     State.bossHeightBoost = 0
@@ -1784,8 +2512,7 @@ function Farm.stopCurrent()
     State.weaponHeightBoost = 0
     State.inDanger = false
     State.bossDeathDetected = false
-    State.lastGroundTouch = nil
-    if State.antiSnipePart then pcall(function() State.antiSnipePart:Destroy() end); State.antiSnipePart = nil end
+    Safety.clearForcedPosition()
     -- Don't clear currentBoss here during looting — farmBoss checks it in the while loop
     if not State.isLooting then
         State.currentBoss = nil
@@ -1796,6 +2523,9 @@ function Farm.stopCurrent()
     -- Disconnect all event connections and cancel threads
     Utils.disconnectAll()
     Utils.cancelAllThreads()
+    if not State.hideState.active and State.mode ~= "hopping" then
+        Utils.setMode("idle")
+    end
 end
 
 -- ============================================
@@ -1803,14 +2533,19 @@ end
 -- ============================================
 function Farm.start()
     if State.running then return end
+    Safety.startWorkers()
+    State.runId = State.runId + 1
+    local currentRunId = State.runId
     State.farmThread = task.spawn(function()
         State.running = true
         State.evacuating = false
+        State.serverHopInProgress = false
+        if not State.hideState.active then
+            Utils.setMode("idle")
+        end
         Utils.notify("Boss auto-farm started!", 3)
-        
-        Safety.startMonitor()
-        
-        while BossFarm.Settings.Enabled and State.running do
+
+        while BossFarm.Settings.Enabled and State.running and State.runId == currentRunId do
             Farm.stopCurrent()
             
             local hum, model, bossName = Detection.findAnySelectedBoss()
@@ -1848,7 +2583,7 @@ function Farm.start()
             -- Check if boss is contested
             local contested, nearPlayer = Safety.isBossContested(model, BossFarm.Settings.PlayerDetectionRadius)
             if contested then
-                Safety.evacuateAndHop("Players nearby! (" .. tostring(nearPlayer) .. ")")
+                Safety.evacuateAndHide("Players nearby! (" .. tostring(nearPlayer) .. ")")
                 return
             end
             
@@ -1857,6 +2592,9 @@ function Farm.start()
         end
         
         State.running = false
+        if State.farmThread and State.runId == currentRunId then
+            State.farmThread = nil
+        end
     end)
 end
 
@@ -1864,14 +2602,15 @@ function Farm.stop()
     BossFarm.Settings.Enabled = false
     State.running = false
     Farm.stopCurrent()
-    if State.farmThread then pcall(task.cancel, State.farmThread) end
+    if State.farmThread then pcall(task.cancel, State.farmThread); State.farmThread = nil end
+    Safety.stopWorkers()
     Utils.notify("Auto-farm stopped", 2)
 end
 
 -- ============================================
 -- ADVANCED BOSS LOOP (Sequential multi-boss cycle)
 -- ============================================
-local BossLoop = {}
+BossLoop = {}
 
 function BossLoop.getSelectedList()
     local list = {}
@@ -1885,15 +2624,20 @@ end
 function BossLoop.start()
     if State.bossLoopThread then pcall(task.cancel, State.bossLoopThread) end
     BossFarm.Settings.BossLoopEnabled = true
+    Safety.startWorkers()
+    State.runId = State.runId + 1
+    local currentRunId = State.runId
     State.running = true
     State.evacuating = false
+    State.serverHopInProgress = false
+    if not State.hideState.active then
+        Utils.setMode("idle")
+    end
     
     State.bossLoopThread = task.spawn(function()
         Utils.notify("Advanced Boss Loop started!", 3)
-        
-        Safety.startMonitor()
-        
-        while BossFarm.Settings.BossLoopEnabled and State.running do
+
+        while BossFarm.Settings.BossLoopEnabled and State.running and State.runId == currentRunId do
             local loopList = BossLoop.getSelectedList()
             
             if #loopList == 0 then
@@ -1937,11 +2681,7 @@ function BossLoop.start()
                 -- Check chakra sense before even looking for the boss (server-wide danger)
                 local senseActive, sensePlayer = Safety.isChakraSenseActive()
                 if senseActive then
-                    if BossFarm.Settings.ServerHopIfChakraSense then
-                        Safety.evacuateAndHop("Chakra Sense (" .. sensePlayer .. ") in loop")
-                    else
-                        Safety.evacuateAndHide("Chakra Sense (" .. sensePlayer .. ") in loop")
-                    end
+                    Safety.evacuateAndHide("Chakra Sense (" .. sensePlayer .. ") in loop")
                     return
                 end
                 
@@ -2099,6 +2839,9 @@ function BossLoop.start()
         end
         
         State.running = false
+        if State.bossLoopThread and State.runId == currentRunId then
+            State.bossLoopThread = nil
+        end
     end)
 end
 
@@ -2107,6 +2850,7 @@ function BossLoop.stop()
     State.running = false
     Farm.stopCurrent()
     if State.bossLoopThread then pcall(task.cancel, State.bossLoopThread); State.bossLoopThread = nil end
+    Safety.stopWorkers()
     Utils.notify("Boss loop stopped", 2)
 end
 

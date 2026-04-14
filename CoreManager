@@ -270,6 +270,7 @@ local Config = {
     BossSelectedBosses = {},
     BossServerHopIfNoBoss = false,
     BossServerHopIfChakraSense = false,
+    BossHideThenHopOnThreat = false,
     BossHopAfterLoop = false,
     BossAutoLootOnKill = false,
     BossAutoSellTrinkets = false,
@@ -316,6 +317,7 @@ local function LoadConfig()
             if decoded.BossSelectedBosses ~= nil then Config.BossSelectedBosses = decoded.BossSelectedBosses end
             if decoded.BossServerHopIfNoBoss ~= nil then Config.BossServerHopIfNoBoss = decoded.BossServerHopIfNoBoss end
             if decoded.BossServerHopIfChakraSense ~= nil then Config.BossServerHopIfChakraSense = decoded.BossServerHopIfChakraSense end
+            if decoded.BossHideThenHopOnThreat ~= nil then Config.BossHideThenHopOnThreat = decoded.BossHideThenHopOnThreat end
             if decoded.BossHopAfterLoop ~= nil then Config.BossHopAfterLoop = decoded.BossHopAfterLoop end
             if decoded.BossAutoLootOnKill ~= nil then Config.BossAutoLootOnKill = decoded.BossAutoLootOnKill end
             if decoded.BossAutoSellTrinkets ~= nil then Config.BossAutoSellTrinkets = decoded.BossAutoSellTrinkets end
@@ -587,6 +589,7 @@ local function AutoLoginRoutine()
         BossFarm.Settings.SelectedBosses = Config.BossSelectedBosses or {}
         BossFarm.Settings.ServerHopIfNoBoss = Config.BossServerHopIfNoBoss
         BossFarm.Settings.ServerHopIfChakraSense = Config.BossServerHopIfChakraSense
+        BossFarm.Settings.HideThenHopOnThreat = Config.BossHideThenHopOnThreat
         BossFarm.Settings.HopAfterLoop = Config.BossHopAfterLoop
         BossFarm.Settings.AutoLootOnKill = Config.BossAutoLootOnKill
         BossFarm.Settings.AutoSellTrinkets = Config.BossAutoSellTrinkets
@@ -633,6 +636,7 @@ end
 if BossFarm then
     BossFarm.Settings.ServerHopIfChakraSense = Config.BossServerHopIfChakraSense
     BossFarm.Settings.ServerHopIfNoBoss = Config.BossServerHopIfNoBoss
+    BossFarm.Settings.HideThenHopOnThreat = Config.BossHideThenHopOnThreat
     BossFarm.Settings.HopAfterLoop = Config.BossHopAfterLoop
     BossFarm.Settings.AutoLootOnKill = Config.BossAutoLootOnKill
     BossFarm.Settings.AutoSellTrinkets = Config.BossAutoSellTrinkets
@@ -1089,11 +1093,23 @@ if BossFarm and AutoFarmHandler then
     })
 
     FarmRight:AddToggle('ServerHopChakra', {
-        Text = 'Hop On Chakra Sense',
+        Text = 'React To Chakra Sense',
         Default = Config.BossServerHopIfChakraSense or false,
+        Tooltip = 'Treat Chakra Sense users as a threat. Hide timing is controlled by Hide Then Hop.',
         Callback = function(val)
             BossFarm.Settings.ServerHopIfChakraSense = val
             Config.BossServerHopIfChakraSense = val
+            SaveConfig()
+        end
+    })
+
+    FarmRight:AddToggle('HideThenHopThreat', {
+        Text = 'Hide Then Hop',
+        Default = Config.BossHideThenHopOnThreat or false,
+        Tooltip = 'Instantly hides at a safe spot on threat, then starts server hopping immediately.',
+        Callback = function(val)
+            BossFarm.Settings.HideThenHopOnThreat = val
+            Config.BossHideThenHopOnThreat = val
             SaveConfig()
         end
     })
