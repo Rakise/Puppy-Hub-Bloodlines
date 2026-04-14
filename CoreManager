@@ -1291,6 +1291,7 @@ MiscGroup:AddToggle('TransTrailToggle', {
     end
 })
 
+local noFogSphereConn = nil
 MiscGroup:AddToggle('NoFogToggle', {
     Text = 'No Fog',
     Default = Config.NoFog or false,
@@ -1300,8 +1301,29 @@ MiscGroup:AddToggle('NoFogToggle', {
         if NoFog then
             if val then
                 NoFog:enable()
+                local debris = workspace:FindFirstChild("Debris")
+                if debris then
+                    local function clearSpheres()
+                        for _, child in ipairs(debris:GetChildren()) do
+                            if child.Name == "InvertedSphere" then
+                                pcall(function() child:Destroy() end)
+                            end
+                        end
+                    end
+                    clearSpheres()
+                    if noFogSphereConn then noFogSphereConn:Disconnect() end
+                    noFogSphereConn = debris.ChildAdded:Connect(function(child)
+                        if child.Name == "InvertedSphere" then
+                            pcall(function() child:Destroy() end)
+                        end
+                    end)
+                end
             else
                 NoFog:disable()
+                if noFogSphereConn then
+                    noFogSphereConn:Disconnect()
+                    noFogSphereConn = nil
+                end
             end
         end
     end

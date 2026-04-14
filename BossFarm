@@ -179,6 +179,7 @@ local TRINKET_VALUES = {
 -- SAFE SPOTS
 -- ============================================
 local SECRET_SPOT = Vector3.new(-3933, 1120, -4571)
+local SECRET_SPOT_BACKUP = Vector3.new(-2605.41016, 629.647888, -5373.87207)
 local HYUGA_VOID_SAFE_SPOT = Vector3.new(-700.8, -334.3, -780.8)
 local HAKU_SAFE_SPOT = Vector3.new(-2969.2, 1832.9, -9610.4)
 
@@ -507,15 +508,6 @@ function Safety.isChakraSenseActive()
                     end
                 end
             end
-            
-            -- Check equipped tools for Chakra Sense
-            if player.Character then
-                for _, tool in ipairs(player.Character:GetChildren()) do
-                    if tool:IsA("Tool") and string.find(string.lower(tool.Name), "sense") then
-                        return true, player.Name
-                    end
-                end
-            end
         end
     end
     return false
@@ -535,12 +527,14 @@ function Safety.evacuateAndHop(reason)
     Utils.notify("Evacuating: " .. tostring(reason), 5)
     Webhook.send("⚠️ Evacuating & Hopping", reason, 15158332)
     
-    -- NOW teleport to safe spot (anchor is already dead, can't fight back)
-    local pd = Utils.getPlayerData()
-    if pd then
-        local distToSpot = (pd.rootPart.Position - SECRET_SPOT).Magnitude
-        if distToSpot > 20 then
-            pd.rootPart.CFrame = CFrame.new(SECRET_SPOT)
+    local safeSpot = Safety.getSafeSpot()
+    if safeSpot then
+        local pd = Utils.getPlayerData()
+        if pd then
+            local distToSpot = (pd.rootPart.Position - safeSpot).Magnitude
+            if distToSpot > 20 then
+                pd.rootPart.CFrame = CFrame.new(safeSpot)
+            end
         end
     end
     
@@ -554,17 +548,19 @@ function Safety.evacuateAndHop(reason)
     BossFarm.Settings.Enabled = false
     BossFarm.Settings.BossLoopEnabled = false
     
-    -- Wait and walk while hopping
+    -- Wait and walk while hopping (if we have a safe spot)
     task.spawn(function()
         while State.evacuating do
-            local cpd = Utils.getPlayerData()
-            if cpd then 
-                local dist = (cpd.rootPart.Position - SECRET_SPOT).Magnitude
-                if dist > 30 then
-                    cpd.rootPart.CFrame = CFrame.new(SECRET_SPOT) 
+            if safeSpot then
+                local cpd = Utils.getPlayerData()
+                if cpd then 
+                    local dist = (cpd.rootPart.Position - safeSpot).Magnitude
+                    if dist > 30 then
+                        cpd.rootPart.CFrame = CFrame.new(safeSpot) 
+                    end
                 end
+                Utils.randomWalkAt(safeSpot, 6)
             end
-            Utils.randomWalkAt(SECRET_SPOT, 6)
             task.wait(math.random(15, 30) / 10)
         end
     end)
@@ -603,6 +599,13 @@ function Safety.evacuateAndHide(reason)
     Utils.log("Hiding: " .. tostring(reason))
     Utils.notify("Hiding at Safe Spot! Waiting for danger to clear...", 5)
     
+    -- Decide which safe spot to use
+    local safeSpot = Safety.getSafeSpot()
+    if not safeSpot then
+        Safety.evacuateAndHop("Both safe spots compromised!")
+        return
+    end
+    
     -- Remember if we were in boss loop mode and what index we were at
     local wasInBossLoop = BossFarm.Settings.BossLoopEnabled
     local resumeIndex = State.bossLoopIndex
@@ -610,9 +613,9 @@ function Safety.evacuateAndHide(reason)
     -- NOW teleport to safe spot if not already there (anchor is already dead, can't fight back)
     local pd = Utils.getPlayerData()
     if pd then
-        local distToSpot = (pd.rootPart.Position - SECRET_SPOT).Magnitude
+        local distToSpot = (pd.rootPart.Position - safeSpot).Magnitude
         if distToSpot > 20 then
-            pd.rootPart.CFrame = CFrame.new(SECRET_SPOT)
+            pd.rootPart.CFrame = CFrame.new(safeSpot)
         end
     end
     
@@ -630,29 +633,25 @@ function Safety.evacuateAndHide(reason)
             -- HOLD safe spot every tick (absolute enforcement)
             local cpd = Utils.getPlayerData()
             if cpd then
-                local dist = (cpd.rootPart.Position - SECRET_SPOT).Magnitude
+                local dist = (cpd.rootPart.Position - safeSpot).Magnitude
                 if dist > 30 then
-                    cpd.rootPart.CFrame = CFrame.new(SECRET_SPOT)
+                    cpd.rootPart.CFrame = CFrame.new(safeSpot)
                 end
             end
-            Utils.randomWalkAt(SECRET_SPOT, 6)
+            Utils.randomWalkAt(safeSpot, 6)
             
             local senseActive, sensePlayer = Safety.isChakraSenseActive()
-            local contested = Safety.isPlayerNearPosition(SECRET_SPOT, BossFarm.Settings.PlayerDetectionRadius)
+            local contested = Safety.isPlayerNearPosition(safeSpot, BossFarm.Settings.PlayerDetectionRadius)
             
             if senseActive or contested then
                 safeTimer = 0
                 dangerTimer = dangerTimer + 2
-                if dangerTimer >= 15 then
-                    Safety.evacuateAndHop("Danger > 15s (" .. (sensePlayer or "Someone nearby") .. ")")
+                if dangerTimer >= 30 then
+                    Safety.evacuateAndHop("Danger > 30s (" .. (sensePlayer or "Someone nearby") .. ")")
                     return
                 end
             else
-                dangerTimer = 0
-                safeTimer = safeTimer + 1
-                if safeTimer >= 10 then
-                    break
-                end
+                break -- Coast is clear at the safe spot, break the loop instantly to attempt resume
             end
             task.wait(2)
         end
@@ -1075,64 +1074,6 @@ end
 
 local TRINKET_CAP = 20
 
-function Loot.scanLootItems(lootSpot, skipGems, skipTrinkets)
-    local items = {}
-    local seen = {} -- prevent duplicates
-    
-    local function scanObj(obj)
-        if not (obj:IsA("Model") or obj:IsA("BasePart")) then return end
-        if not TrinketSet[obj.Name] then return end
-        if seen[obj] then return end
-        
-        -- Skip gems if at cap
-        if skipGems and GemSet[obj.Name] then return end
-        -- Skip trinkets (non-gem) if at cap
-        if skipTrinkets and TrinketSet[obj.Name] and not GemSet[obj.Name] then return end
-        
-        local pos = nil
-        if obj:IsA("BasePart") then
-            pos = obj.Position
-        elseif obj:IsA("Model") then
-            local pp = obj.PrimaryPart or obj:FindFirstChildWhichIsA("BasePart")
-            if pp then pos = pp.Position end
-        end
-        
-        if pos and (lootSpot - pos).Magnitude <= 200 then
-            local idVal = obj:FindFirstChild("ID")
-            if not idVal then
-                for _, d in ipairs(obj:GetChildren()) do
-                    if d.Name == "ID" and d:IsA("NumberValue") then
-                        idVal = d
-                        break
-                    end
-                end
-            end
-            if idVal then
-                seen[obj] = true
-                table.insert(items, {
-                    obj = obj, pos = pos, id = idVal.Value,
-                    name = obj.Name,
-                    dist = (lootSpot - pos).Magnitude,
-                    isGem = GemSet[obj.Name] or false,
-                })
-            end
-        end
-    end
-    
-    -- Scan workspace root children (most loot spawns here)
-    for _, obj in ipairs(workspace:GetChildren()) do
-        scanObj(obj)
-        -- Also check one level deep (loot inside folders)
-        if obj:IsA("Folder") or obj:IsA("Model") then
-            for _, child in ipairs(obj:GetChildren()) do
-                scanObj(child)
-            end
-        end
-    end
-    
-    return items
-end
-
 function Loot.collectNearBoss(bossName, config)
     local lootSpot = config.lootSpot
     if not lootSpot then return end
@@ -1156,11 +1097,10 @@ function Loot.collectNearBoss(bossName, config)
             pcall(function() dataEvent:FireServer("PickUp", entry.id) end)
             task.wait(0.05)
         end
-        
         return not entry.obj.Parent
     end
     
-    -- Helper: safety check (returns true if danger detected)
+    -- Helper: safety check --
     local function checkSafety()
         local senseActive, sensePlayer = Safety.isChakraSenseActive()
         if senseActive then
@@ -1186,60 +1126,115 @@ function Loot.collectNearBoss(bossName, config)
     Utils.log("Collecting loot for " .. bossName)
     Utils.notify("Collecting loot...", 3)
     
-    -- Check inventory caps before scanning
     local gemCount = Loot.getGemCount()
     local trinketCount = Loot.getTrinketCount()
     local skipGems = gemCount >= GEM_CAP
     local skipTrinkets = trinketCount >= TRINKET_CAP
-    if skipGems then Utils.log("Gems at cap (" .. gemCount .. "/" .. GEM_CAP .. "), skipping gem pickups.") end
-    if skipTrinkets then Utils.log("Trinkets at cap (" .. trinketCount .. "/" .. TRINKET_CAP .. "), skipping trinket pickups.") end
+    if skipGems then Utils.log("Gems at cap, skipping gems.") end
+    if skipTrinkets then Utils.log("Trinkets at cap, skipping known trinkets.") end
     
     local collectedNames = {}
+    local pendingQueue = {}
+    local seenObj = {}
+    
+    local function queueObj(obj)
+        if not obj or not (obj:IsA("Model") or obj:IsA("BasePart")) then return end
+        if seenObj[obj] then return end
+        
+        local isGem = GemSet[obj.Name]
+        local isTrinket = TrinketSet[obj.Name] and not isGem
+        
+        -- Cap skipping
+        if isGem and skipGems then return end
+        -- Unknown/special items (like a wrap) aren't in TrinketSet, so they bypass this skip perfectly
+        if isTrinket and skipTrinkets then return end
+        
+        local pos = nil
+        if obj:IsA("BasePart") then pos = obj.Position
+        elseif obj:IsA("Model") then
+            local pp = obj.PrimaryPart or obj:FindFirstChildWhichIsA("BasePart")
+            if pp then pos = pp.Position end
+        end
+        if not pos then return end
+        if (lootSpot - pos).Magnitude > 200 then return end
+        
+        -- Boss loot ALWAYS has an ID value
+        local idVal = obj:FindFirstChild("ID")
+        if not idVal then
+            for _, d in ipairs(obj:GetChildren()) do
+                if d.Name == "ID" and d:IsA("NumberValue") then
+                    idVal = d
+                    break
+                end
+            end
+        end
+        if not idVal then return end
+        
+        seenObj[obj] = true
+        table.insert(pendingQueue, {
+            obj = obj, pos = pos, id = idVal.Value,
+            name = obj.Name, dist = (lootSpot - pos).Magnitude
+        })
+    end
+    
+    -- Initial fast scan across Workspace root
+    for _, obj in ipairs(workspace:GetChildren()) do
+        queueObj(obj)
+        if obj:IsA("Folder") or obj:IsA("Model") then
+            for _, child in ipairs(obj:GetChildren()) do queueObj(child) end
+        end
+    end
+    
+    -- Setup listeners for loot dropping slightly late
+    local conn1 = workspace.ChildAdded:Connect(function(child)
+        task.delay(0.2, function() queueObj(child) end)
+    end)
+    local debris = workspace:FindFirstChild("Debris")
+    local conn2 = debris and debris.ChildAdded:Connect(function(child)
+        task.delay(0.2, function() queueObj(child) end)
+    end)
+    
     local startTime = tick()
-    local maxWait = 15 -- Max seconds to wait for loot
-    local lastScanCount = 0
+    local maxWait = 30 -- Max seconds to wait for loot
     local noNewItemTimer = 0
     
-    -- Dynamic loop: scan + collect, exit when no new items for 5s or 15s total
+    -- Dynamic loop: grab queue, exit when no new items
     while tick() - startTime < maxWait do
-        -- Hold position at loot spot
+        -- Hold position securely overhead to prevent being hit/stuck
         pData = Utils.getPlayerData()
-        if pData then pData.rootPart.CFrame = CFrame.new(lootSpot) end
+        if pData then
+            pData.rootPart.CFrame = CFrame.new(lootSpot + Vector3.new(0, 15, 0))
+        end
         
         -- Safety check
-        if checkSafety() then return end
+        if checkSafety() then break end
         
-        -- Scan for items (skipping capped categories)
-        local items = Loot.scanLootItems(lootSpot, skipGems, skipTrinkets)
-        
-        if #items > 0 then
-            -- Pick up everything we found
-            table.sort(items, function(a, b) return a.dist < b.dist end)
-            for _, entry in ipairs(items) do
-                if checkSafety() then return end
+        if #pendingQueue > 0 then
+            local toProcess = pendingQueue
+            pendingQueue = {}
+            table.sort(toProcess, function(a, b) return a.dist < b.dist end)
+            
+            for _, entry in ipairs(toProcess) do
+                if checkSafety() then break end
                 if pickupItem(entry) then
                     table.insert(collectedNames, entry.name)
                 end
             end
-            
-            -- If we found new items, reset the no-new-item timer
-            if #items > lastScanCount then
-                noNewItemTimer = 0
-            else
-                noNewItemTimer = noNewItemTimer + 1
-            end
-            lastScanCount = #items
+            noNewItemTimer = 0
         else
             noNewItemTimer = noNewItemTimer + 1
         end
         
-        -- If we've collected at least 1 item and no new items for 5 scans, we're done
+        -- Exit condition
         if #collectedNames > 0 and noNewItemTimer >= 5 then
             break
         end
         
-        task.wait(1) -- Scan every second
+        task.wait(1)
     end
+    
+    if conn1 then conn1:Disconnect() end
+    if conn2 then conn2:Disconnect() end
     
     local lootSummary = #collectedNames > 0 and table.concat(collectedNames, ", ") or "None"
     Utils.notify("Boss loot collected! (" .. #collectedNames .. " items)", 3)
