@@ -1152,7 +1152,9 @@ function Loot.collectNearBoss(bossName, config)
     local seenObj = {}
     
     local function queueObj(obj)
-        if not obj or not (obj:IsA("Model") or obj:IsA("BasePart")) then return end
+        if not obj then return end
+        -- Accept Models, BaseParts, and also MeshParts that might be standalone loot
+        if not (obj:IsA("Model") or obj:IsA("BasePart")) then return end
         if seenObj[obj] then return end
         
         local isGem = GemSet[obj.Name]
@@ -1163,24 +1165,36 @@ function Loot.collectNearBoss(bossName, config)
         -- Unknown/special items (like a wrap) aren't in TrinketSet, so they bypass this skip perfectly
         if isTrinket and skipTrinkets then return end
         
+        -- Position: try multiple strategies for weird model structures
         local pos = nil
-        if obj:IsA("BasePart") then pos = obj.Position
+        if obj:IsA("BasePart") then
+            pos = obj.Position
         elseif obj:IsA("Model") then
-            local pp = obj.PrimaryPart or obj:FindFirstChildWhichIsA("BasePart")
-            if pp then pos = pp.Position end
+            -- 1. PrimaryPart
+            if obj.PrimaryPart then
+                pos = obj.PrimaryPart.Position
+            else
+                -- 2. Direct child BasePart
+                local directPart = obj:FindFirstChildWhichIsA("BasePart")
+                if directPart then
+                    pos = directPart.Position
+                else
+                    -- 3. Recursive search — handles nested models (wraps, schematics, etc.)
+                    local deepPart = obj:FindFirstChildWhichIsA("BasePart", true)
+                    if deepPart then
+                        pos = deepPart.Position
+                    end
+                end
+            end
         end
         if not pos then return end
         if (lootSpot - pos).Magnitude > 200 then return end
         
-        -- Boss loot ALWAYS has an ID value
-        local idVal = obj:FindFirstChild("ID")
-        if not idVal then
-            for _, d in ipairs(obj:GetChildren()) do
-                if d.Name == "ID" and d:IsA("NumberValue") then
-                    idVal = d
-                    break
-                end
-            end
+        -- ID lookup: recursive search to find ID anywhere in the hierarchy
+        local idVal = obj:FindFirstChild("ID", true) -- recursive=true
+        -- Validate it's actually a value type we can use
+        if idVal and not (idVal:IsA("NumberValue") or idVal:IsA("IntValue") or idVal:IsA("StringValue")) then
+            idVal = nil
         end
         if not idVal then return end
         
