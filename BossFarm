@@ -1434,13 +1434,11 @@ end
 Farm = {}
 
 function Weapons.equip(weaponName)
-    local pData = Utils.getPlayerData()
-    if not pData then return end
-    if not weaponName then return end
+    if not weaponName or weaponName == "" then return end
     
-    local tool = pData.backpack:FindFirstChild(weaponName)
-    if tool then
-        pData.humanoid:EquipTool(tool)
+    local dataEvent = GetDataEvent()
+    if dataEvent then
+        pcall(function() dataEvent:FireServer("Item", "Selected", weaponName) end)
     end
 end
 
