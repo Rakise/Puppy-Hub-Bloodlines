@@ -1064,42 +1064,59 @@ local TRINKET_CAP = 20
 
 function Loot.scanLootItems(lootSpot, skipGems, skipTrinkets)
     local items = {}
-    for _, obj in ipairs(workspace:GetDescendants()) do
-        if (obj:IsA("Model") or obj:IsA("BasePart")) and TrinketSet[obj.Name] then
-            -- Skip gems if at cap
-            if skipGems and GemSet[obj.Name] then continue end
-            -- Skip trinkets (non-gem) if at cap
-            if skipTrinkets and TrinketSet[obj.Name] and not GemSet[obj.Name] then continue end
-            
-            local pos = nil
-            if obj:IsA("BasePart") then
-                pos = obj.Position
-            elseif obj:IsA("Model") then
-                local pp = obj.PrimaryPart or obj:FindFirstChildWhichIsA("BasePart")
-                if pp then pos = pp.Position end
-            end
-            
-            if pos and (lootSpot - pos).Magnitude <= 200 then
-                local idVal = obj:FindFirstChild("ID")
-                if not idVal then
-                    for _, d in ipairs(obj:GetDescendants()) do
-                        if d.Name == "ID" and d:IsA("NumberValue") then
-                            idVal = d
-                            break
-                        end
+    local seen = {} -- prevent duplicates
+    
+    local function scanObj(obj)
+        if not (obj:IsA("Model") or obj:IsA("BasePart")) then return end
+        if not TrinketSet[obj.Name] then return end
+        if seen[obj] then return end
+        
+        -- Skip gems if at cap
+        if skipGems and GemSet[obj.Name] then return end
+        -- Skip trinkets (non-gem) if at cap
+        if skipTrinkets and TrinketSet[obj.Name] and not GemSet[obj.Name] then return end
+        
+        local pos = nil
+        if obj:IsA("BasePart") then
+            pos = obj.Position
+        elseif obj:IsA("Model") then
+            local pp = obj.PrimaryPart or obj:FindFirstChildWhichIsA("BasePart")
+            if pp then pos = pp.Position end
+        end
+        
+        if pos and (lootSpot - pos).Magnitude <= 200 then
+            local idVal = obj:FindFirstChild("ID")
+            if not idVal then
+                for _, d in ipairs(obj:GetChildren()) do
+                    if d.Name == "ID" and d:IsA("NumberValue") then
+                        idVal = d
+                        break
                     end
                 end
-                if idVal then
-                    table.insert(items, {
-                        obj = obj, pos = pos, id = idVal.Value,
-                        name = obj.Name,
-                        dist = (lootSpot - pos).Magnitude,
-                        isGem = GemSet[obj.Name] or false,
-                    })
-                end
+            end
+            if idVal then
+                seen[obj] = true
+                table.insert(items, {
+                    obj = obj, pos = pos, id = idVal.Value,
+                    name = obj.Name,
+                    dist = (lootSpot - pos).Magnitude,
+                    isGem = GemSet[obj.Name] or false,
+                })
             end
         end
     end
+    
+    -- Scan workspace root children (most loot spawns here)
+    for _, obj in ipairs(workspace:GetChildren()) do
+        scanObj(obj)
+        -- Also check one level deep (loot inside folders)
+        if obj:IsA("Folder") or obj:IsA("Model") then
+            for _, child in ipairs(obj:GetChildren()) do
+                scanObj(child)
+            end
+        end
+    end
+    
     return items
 end
 
@@ -1166,11 +1183,11 @@ function Loot.collectNearBoss(bossName, config)
     
     local collectedNames = {}
     local startTime = tick()
-    local maxWait = 8 -- Max seconds to wait for loot
+    local maxWait = 15 -- Max seconds to wait for loot
     local lastScanCount = 0
     local noNewItemTimer = 0
     
-    -- Dynamic loop: scan + collect simultaneously, exit when no new items for 3s or 8s total
+    -- Dynamic loop: scan + collect, exit when no new items for 5s or 15s total
     while tick() - startTime < maxWait do
         -- Hold position at loot spot
         pData = Utils.getPlayerData()
@@ -1203,8 +1220,8 @@ function Loot.collectNearBoss(bossName, config)
             noNewItemTimer = noNewItemTimer + 1
         end
         
-        -- If we've collected at least 1 item and no new items for 3 scans, we're done
-        if #collectedNames > 0 and noNewItemTimer >= 3 then
+        -- If we've collected at least 1 item and no new items for 5 scans, we're done
+        if #collectedNames > 0 and noNewItemTimer >= 5 then
             break
         end
         
