@@ -177,6 +177,14 @@ local SECRET_SPOT_BACKUP = Vector3.new(-2605.41016, 629.647888, -5373.87207)
 local HYUGA_VOID_SAFE_SPOT = Vector3.new(-700.8, -334.3, -780.8)
 local HYUGA_DANGER_DODGE_SPOT = Vector3.new(-1469.2, -359.9, -9610.4)
 local HAKU_SAFE_SPOT = Vector3.new(-9788.1, 1010.5, -9723.9)
+local WOODEN_GOLEM_DODGE_SPOTS = {
+    Vector3.new(-4514.50048828125, 336.9197692871094, -2998.1533203125),
+    Vector3.new(-4522.03564453125, 336.9197082519531, -2877.849365234375),
+    Vector3.new(-4724.2041015625, 336.91973876953125, -2856.17919921875),
+    Vector3.new(-4727.5517578125, 336.9197692871094, -3005.190673828125),
+}
+local WOODEN_GOLEM_DODGE_DURATION = 6.7
+local WOODEN_GOLEM_TWEEN_DURATION = 0.2
 -- ============================================
 -- CHARGE ANIMATION
 -- ============================================
@@ -813,6 +821,7 @@ local BossLoop
 local HIDE_RESUME_CLEAR_TIME = 0.35
 local HAKU_FORCE_PRIORITY = 80
 local HYUGA_DODGE_PRIORITY = 70
+local WOODEN_GOLEM_DODGE_PRIORITY = 60
 local GENERIC_DODGE_PRIORITY = 40
 
 local function newHideState()
@@ -1665,6 +1674,103 @@ function AnimMonitors.setupHyuga(model)
     end))
 end
 
+function AnimMonitors.setupWoodenGolem(model, config)
+    if not config or not config.dangerousAnimations then return end
+
+    local hum = model:FindFirstChildOfClass("Humanoid")
+    if not hum then return end
+    local animator = hum:FindFirstChildOfClass("Animator")
+    if not animator then return end
+
+    local function abortOrbitIfUnsafe(currentRunId)
+        if State.runId ~= currentRunId
+            or not State.running
+            or State.evacuating
+            or State.hideState.active
+            or State.mode == "hopping"
+            or State.currentBoss ~= "Wooden Golem" then
+            return true
+        end
+
+        local hasThreat, threatReason = Safety.getThreatReason()
+        if hasThreat then
+            Safety.enterHide(threatReason or "Wooden Golem danger interrupted")
+            return true
+        end
+
+        return false
+    end
+
+    Utils.addConnection(animator.AnimationPlayed:Connect(function(track)
+        if not State.running then return end
+
+        local assetId = track.Animation.AnimationId:match("rbxassetid://(%d+)") or track.Animation.AnimationId
+        if not config.dangerousAnimations[assetId] then
+            return
+        end
+
+        local currentRunId = State.runId
+        Utils.addThread(task.spawn(function()
+            local deadline = tick() + WOODEN_GOLEM_DODGE_DURATION
+            local currentIndex = 1
+            local currentSpot = WOODEN_GOLEM_DODGE_SPOTS[currentIndex]
+
+            if abortOrbitIfUnsafe(currentRunId) then
+                return
+            end
+
+            Safety.setForcedPosition(currentSpot, WOODEN_GOLEM_TWEEN_DURATION + 0.05, WOODEN_GOLEM_DODGE_PRIORITY, "Wooden Golem danger")
+            local playerData = Utils.getPlayerData()
+            if playerData then
+                playerData.rootPart.CFrame = CFrame.new(currentSpot)
+            end
+
+            while tick() < deadline do
+                if abortOrbitIfUnsafe(currentRunId) then
+                    return
+                end
+
+                local nextIndex = currentIndex + 1
+                if nextIndex > #WOODEN_GOLEM_DODGE_SPOTS then
+                    nextIndex = 1
+                end
+
+                local nextSpot = WOODEN_GOLEM_DODGE_SPOTS[nextIndex]
+                local segmentStart = tick()
+
+                while tick() < deadline do
+                    if abortOrbitIfUnsafe(currentRunId) then
+                        return
+                    end
+
+                    local elapsed = tick() - segmentStart
+                    local alpha = math.clamp(elapsed / WOODEN_GOLEM_TWEEN_DURATION, 0, 1)
+                    local position = currentSpot:Lerp(nextSpot, alpha)
+
+                    Safety.setForcedPosition(position, WOODEN_GOLEM_TWEEN_DURATION + 0.05, WOODEN_GOLEM_DODGE_PRIORITY, "Wooden Golem danger")
+                    local orbitPlayerData = Utils.getPlayerData()
+                    if orbitPlayerData then
+                        orbitPlayerData.rootPart.CFrame = CFrame.new(position)
+                    end
+
+                    if alpha >= 1 then
+                        break
+                    end
+
+                    RunService.Heartbeat:Wait()
+                end
+
+                currentIndex = nextIndex
+                currentSpot = nextSpot
+            end
+
+            if not abortOrbitIfUnsafe(currentRunId) then
+                Safety.setForcedPosition(currentSpot, 0.15, WOODEN_GOLEM_DODGE_PRIORITY, "Wooden Golem danger")
+            end
+        end))
+    end))
+end
+
 -- Haku Boss: Ice Dragon dodge
 function AnimMonitors.setupHaku()
     local debris = workspace:FindFirstChild("Debris")
@@ -1730,6 +1836,8 @@ function AnimMonitors.setup(model, bossName, config)
     
     if bossName == "Hyuga Boss" then
         AnimMonitors.setupHyuga(model)
+    elseif bossName == "Wooden Golem" then
+        AnimMonitors.setupWoodenGolem(model, config)
     elseif bossName == "Haku Boss" then
         AnimMonitors.setupHaku()
     elseif bossName == "The Ringed Samurai" then
@@ -1739,7 +1847,7 @@ function AnimMonitors.setup(model, bossName, config)
     -- Generic animation handler for all bosses that define dangerousAnimations
     if config.dangerousAnimations and next(config.dangerousAnimations) then
         -- Don't double-setup for bosses with dedicated handlers
-        if bossName ~= "Hyuga Boss" then
+        if bossName ~= "Hyuga Boss" and bossName ~= "Wooden Golem" then
             AnimMonitors.setupGeneric(model, config)
         end
     end
