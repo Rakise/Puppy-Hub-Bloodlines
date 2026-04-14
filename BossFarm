@@ -1424,15 +1424,23 @@ function Positioning.startAnchoring(model, config)
                 pData.rootPart.CFrame = CFrame.new(HAKU_SAFE_SPOT)
             else
                 local totalHeight = (config.height or 15)
-                    + State.bossHeightBoost
                     + State.weaponHeightBoost
                 
-                local yOffset = config.positionAbove and totalHeight or -totalHeight
-                
-                pData.rootPart.CFrame = CFrame.lookAt(
-                    bossRoot.Position + Vector3.new(0, yOffset, 0),
-                    bossRoot.Position
-                )
+                -- For below-bosses (positionAbove = false), dodge horizontally instead of going deeper
+                -- Going further down would fall into the void under the arena
+                if not config.positionAbove and State.bossHeightBoost > 0 then
+                    -- Horizontal dodge: 1000 studs away on X axis, same Y level
+                    local dodgePos = bossRoot.Position + Vector3.new(1000, -totalHeight, 0)
+                    pData.rootPart.CFrame = CFrame.new(dodgePos)
+                else
+                    totalHeight = totalHeight + State.bossHeightBoost
+                    local yOffset = config.positionAbove and totalHeight or -totalHeight
+                    
+                    pData.rootPart.CFrame = CFrame.lookAt(
+                        bossRoot.Position + Vector3.new(0, yOffset, 0),
+                        bossRoot.Position
+                    )
+                end
                 
                 -- Anti-Snipe System (spawn invisible platform beneath feet to reset fall duration flag)
                 local now = tick()
