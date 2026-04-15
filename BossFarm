@@ -176,6 +176,9 @@ local SECRET_SPOT = Vector3.new(-3933, 1120, -4571)
 local SECRET_SPOT_BACKUP = Vector3.new(-2605.41016, 629.647888, -5373.87207)
 local HYUGA_VOID_SAFE_SPOT = Vector3.new(-700.8, -334.3, -780.8)
 local HYUGA_DANGER_DODGE_SPOT = Vector3.new(-1469.2, -359.9, -9610.4)
+local HYUGA_ARENA_ESCAPE_SPOT = HYUGA_DANGER_DODGE_SPOT
+local HYUGA_ARENA_REGION_MIN = Vector3.new(-748.399169921875, -367.0005187988281, -846.8639526367188)
+local HYUGA_ARENA_REGION_MAX = Vector3.new(-599.4711303710938, -269.55303955078125, -693.4671630859375)
 local HAKU_SAFE_SPOT = Vector3.new(-9788.1, 1010.5, -9723.9)
 local WOODEN_GOLEM_DODGE_SPOTS = {
     Vector3.new(-4514.50048828125, 336.9197692871094, -2998.1533203125),
@@ -184,7 +187,7 @@ local WOODEN_GOLEM_DODGE_SPOTS = {
     Vector3.new(-4727.5517578125, 336.9197692871094, -3005.190673828125),
 }
 local WOODEN_GOLEM_DODGE_DURATION = 6.7
-local WOODEN_GOLEM_TWEEN_DURATION = 0.2
+local WOODEN_GOLEM_TWEEN_DURATION = 0.01
 -- ============================================
 -- CHARGE ANIMATION
 -- ============================================
@@ -207,6 +210,7 @@ local State = {
     workerThreads = {},
     playerWatchers = {},
     localCharacterConnections = {},
+    localCharacterStatusConnections = {},
     settingsConnections = {},
     characterBaseParts = {},
     lastBossPosition = nil,
@@ -223,6 +227,9 @@ local State = {
     bossHeightBoost = 0,
     -- Hyuga void
     hyugaInVoid = false,
+    hyugaArenaUnsafe = false,
+    hyugaArenaUnsafeSince = 0,
+    hyugaArenaTimeoutRequested = false,
     -- Haku safe spot
     hakuSafeSpot = false,
     hakuSafeSpotEndTime = 0,
@@ -244,7 +251,11 @@ local State = {
     evacuating = false,
     workersActive = false,
     serverHopInProgress = false,
+    deathQuitTriggered = false,
+    lastIncomingDamageAt = 0,
+    lastKnownHealth = 0,
     forcedPosition = nil,
+    skippedBossUntil = {},
     hideState = {
         active = false,
         spot = nil,
@@ -420,6 +431,13 @@ end
 
 function Utils.setMode(mode)
     State.mode = mode
+end
+
+function Utils.isInsideRegion(position, minPosition, maxPosition)
+    if not position then return false end
+    return position.X >= minPosition.X and position.X <= maxPosition.X
+        and position.Y >= minPosition.Y and position.Y <= maxPosition.Y
+        and position.Z >= minPosition.Z and position.Z <= maxPosition.Z
 end
 
 -- Simulate natural player movement near a position (anti-detection)
@@ -820,7 +838,9 @@ end
 local BossLoop
 local HIDE_RESUME_CLEAR_TIME = 0.35
 local HAKU_FORCE_PRIORITY = 80
+local HYUGA_ARENA_ESCAPE_PRIORITY = 75
 local HYUGA_DODGE_PRIORITY = 70
+local RINGED_SAMURAI_DODGE_PRIORITY = 65
 local WOODEN_GOLEM_DODGE_PRIORITY = 60
 local GENERIC_DODGE_PRIORITY = 40
 
@@ -836,6 +856,7 @@ local function newHideState()
         resumeSingle = false,
         resumeIndex = 0,
         hopStarted = false,
+        lastSwapAt = 0,
     }
 end
 
@@ -1076,12 +1097,26 @@ end
 function Safety.startLocalCharacterWatcher()
     Utils.disconnectConnections(State.localCharacterConnections)
     State.localCharacterDescendantConnections = State.localCharacterDescendantConnections or {}
+    State.localCharacterStatusConnections = State.localCharacterStatusConnections or {}
     Utils.disconnectConnections(State.localCharacterDescendantConnections)
+    Utils.disconnectConnections(State.localCharacterStatusConnections)
 
     local function bindLocalCharacter(character)
         Utils.disconnectConnections(State.localCharacterDescendantConnections)
+        Utils.disconnectConnections(State.localCharacterStatusConnections)
         Utils.rebuildCharacterBaseParts(character)
         if not character then return end
+
+        local humanoid = character:FindFirstChildOfClass("Humanoid")
+        if humanoid then
+            State.lastKnownHealth = humanoid.Health
+            table.insert(State.localCharacterStatusConnections, humanoid.HealthChanged:Connect(function(health)
+                Safety.handleIncomingDamage(health)
+            end))
+            table.insert(State.localCharacterStatusConnections, humanoid.Died:Connect(function()
+                Safety.quitForDeath()
+            end))
+        end
 
         table.insert(State.localCharacterDescendantConnections, character.DescendantAdded:Connect(function(descendant)
             if descendant:IsA("BasePart") then
@@ -1098,6 +1133,7 @@ function Safety.startLocalCharacterWatcher()
     bindLocalCharacter(LocalPlayer.Character)
     table.insert(State.localCharacterConnections, LocalPlayer.CharacterAdded:Connect(bindLocalCharacter))
     table.insert(State.localCharacterConnections, LocalPlayer.CharacterRemoving:Connect(function()
+        Utils.disconnectConnections(State.localCharacterStatusConnections)
         Utils.disconnectConnections(State.localCharacterDescendantConnections)
         Utils.rebuildCharacterBaseParts(nil)
     end))
@@ -1251,7 +1287,98 @@ function Safety.getThreatReason()
     return false, nil
 end
 
-function Safety.clearForcedPosition()
+function Safety.getAlternateHideSpot(currentSpot)
+    if currentSpot and (currentSpot - SECRET_SPOT).Magnitude <= 1 then
+        return SECRET_SPOT_BACKUP
+    end
+    return SECRET_SPOT
+end
+
+function Safety.forceTeleport(targetPosition)
+    if not targetPosition then return end
+    local playerData = Utils.getPlayerData()
+    if not playerData then return end
+
+    local targetCFrame = CFrame.new(targetPosition)
+    if (playerData.rootPart.Position - targetPosition).Magnitude > 35 then
+        Utils.safeTeleport(targetCFrame)
+    else
+        playerData.rootPart.CFrame = targetCFrame
+    end
+end
+
+function Safety.swapHideSpot(reason)
+    if not State.hideState.active then return false end
+
+    local now = tick()
+    if State.hideState.lastSwapAt and (now - State.hideState.lastSwapAt) < 0.25 then
+        return false
+    end
+
+    local alternateSpot = Safety.getAlternateHideSpot(State.hideState.spot or SECRET_SPOT)
+    State.hideState.spot = alternateSpot
+    State.hideState.lastSwapAt = now
+    State.hideState.lastDangerAt = now
+    Utils.log("Swapping hide spot: " .. tostring(reason or "Unknown"))
+    Safety.forceTeleport(alternateSpot)
+    return true
+end
+
+function Safety.quitForDeath()
+    if State.deathQuitTriggered then return end
+    if not (State.workersActive or State.running or BossFarm.Settings.Enabled or BossFarm.Settings.BossLoopEnabled or State.hideState.active or State.mode == "hopping") then
+        return
+    end
+
+    State.deathQuitTriggered = true
+    Utils.log("Character died. Quitting for safety.", "warn")
+
+    BossFarm.Settings.Enabled = false
+    BossFarm.Settings.BossLoopEnabled = false
+    State.running = false
+    State.evacuating = false
+    State.serverHopInProgress = false
+
+    pcall(function() Farm.stopCurrent() end)
+    pcall(function()
+        if State.farmThread then pcall(task.cancel, State.farmThread); State.farmThread = nil end
+        if State.bossLoopThread then pcall(task.cancel, State.bossLoopThread); State.bossLoopThread = nil end
+    end)
+    pcall(function() Safety.stopWorkers() end)
+
+    task.defer(function()
+        pcall(function()
+            LocalPlayer:Kick("died, quitting for safety")
+        end)
+    end)
+end
+
+function Safety.handleIncomingDamage(newHealth)
+    local previousHealth = State.lastKnownHealth or newHealth or 0
+    State.lastKnownHealth = newHealth or previousHealth
+
+    if not newHealth then
+        return
+    end
+
+    if newHealth <= 0 then
+        Safety.quitForDeath()
+        return
+    end
+
+    if newHealth < previousHealth then
+        State.lastIncomingDamageAt = tick()
+        if State.hideState.active or State.evacuating or State.mode == "hopping" then
+            Safety.swapHideSpot("Damage while evacuating")
+        end
+    end
+end
+
+function Safety.clearForcedPosition(reasonMatch)
+    if reasonMatch and State.forcedPosition and State.forcedPosition.reason ~= reasonMatch then
+        return
+    end
+
     State.forcedPosition = nil
     if State.mode == "dodging" then
         if State.running and State.currentBoss and not State.hideState.active then
@@ -1353,6 +1480,7 @@ function Safety.enterHide(reason)
     Utils.setMode("hiding")
     Utils.log("Hiding: " .. tostring(reason))
     Utils.notify("Hiding at Safe Spot...", 4)
+    Safety.forceTeleport(State.hideState.spot)
 
     if BossFarm.Settings.HideThenHopOnThreat then
         Safety.startHop(reason)
@@ -1385,6 +1513,8 @@ function Safety.startWorkers()
     State.workersActive = true
     State.threatCache = newThreatCache()
     State.serverHopInProgress = false
+    State.deathQuitTriggered = false
+    State.lastIncomingDamageAt = 0
 
     Safety.startLocalCharacterWatcher()
     for _, player in ipairs(Players:GetPlayers()) do
@@ -1413,24 +1543,19 @@ function Safety.startWorkers()
         if State.hideState.active then
             local playerData = Utils.getPlayerData()
             local hideSpot = Safety.getSafeSpot()
-            State.hideState.spot = hideSpot
+            if State.hideState.spot == nil then
+                State.hideState.spot = hideSpot
+            else
+                hideSpot = State.hideState.spot
+            end
+
+            if State.lastIncomingDamageAt ~= 0 and tick() - State.lastIncomingDamageAt <= 1 then
+                Safety.swapHideSpot("Recent damage while hidden")
+                hideSpot = State.hideState.spot
+            end
 
             if playerData and hideSpot then
-                local currentPos = playerData.rootPart.Position
-                -- Ignore Y axis to allow gravity to physically drop the character
-                local dist = Vector3.new(currentPos.X - hideSpot.X, 0, currentPos.Z - hideSpot.Z).Magnitude
-                
-                if dist > 30 then
-                    -- Drifting horizontally too far; snap back securely
-                    playerData.rootPart.CFrame = CFrame.new(hideSpot)
-                else
-                    -- Safe zone maintained. Walk naturally to avoid looking frozen.
-                    if not State.hideState.lastWalkTick then State.hideState.lastWalkTick = 0 end
-                    if tick() - State.hideState.lastWalkTick > 2 then
-                        State.hideState.lastWalkTick = tick()
-                        Utils.randomWalkAt(hideSpot, 6)
-                    end
-                end
+                playerData.rootPart.CFrame = CFrame.new(hideSpot)
             end
 
             if hasThreat then
@@ -1469,7 +1594,9 @@ function Safety.stopWorkers()
     Utils.cancelWorkerThreads()
     Utils.disconnectConnections(State.localCharacterConnections)
     State.localCharacterDescendantConnections = State.localCharacterDescendantConnections or {}
+    State.localCharacterStatusConnections = State.localCharacterStatusConnections or {}
     Utils.disconnectConnections(State.localCharacterDescendantConnections)
+    Utils.disconnectConnections(State.localCharacterStatusConnections)
     Utils.disconnectConnections(State.settingsConnections)
 
     local playersToClear = {}
@@ -1486,6 +1613,8 @@ function Safety.stopWorkers()
     State.threatCache = newThreatCache()
     State.serverHopInProgress = false
     State.workersActive = false
+    State.lastIncomingDamageAt = 0
+    State.lastKnownHealth = 0
     Safety.clearForcedPosition()
 end
 
@@ -1507,7 +1636,16 @@ end
 -- ============================================
 local Detection = {}
 
+function Detection.isTemporarilySkipped(bossName)
+    local expiresAt = State.skippedBossUntil and State.skippedBossUntil[bossName]
+    return expiresAt and expiresAt > tick()
+end
+
 function Detection.findBoss(bossName)
+    if Detection.isTemporarilySkipped(bossName) then
+        return nil, nil
+    end
+
     -- Search workspace root, NPCs, Mobs, Enemies folders
     for _, folderName in ipairs({"NPCs", "Mobs", "Enemies"}) do
         local folder = workspace:FindFirstChild(folderName)
@@ -1541,6 +1679,10 @@ function Detection.findAnySelectedBoss()
 end
 
 function Detection.triggerSpawnIfNeeded(bossName, config)
+    if Detection.isTemporarilySkipped(bossName) then
+        return false
+    end
+
     if not config.triggerSpawn then return false end
     
     local targetPos = nil
@@ -1637,16 +1779,56 @@ function AnimMonitors.setupHyuga(model)
     end))
     
     Utils.addThread(task.spawn(function()
-        while State.running and model and model.Parent do
-            local inVoid = isInHyugaVoidZone(bossRoot.Position)
+        local currentRunId = State.runId
+        local lastEscapeTeleport = 0
+
+        while State.running and model and model.Parent and State.runId == currentRunId do
+            local bossPosition = bossRoot.Position
+            local inVoid = isInHyugaVoidZone(bossPosition)
             if inVoid and not State.hyugaInVoid then
                 State.hyugaInVoid = true
             elseif not inVoid and State.hyugaInVoid then
                 State.hyugaInVoid = false
             end
-            task.wait(0.5)
+
+            if not Utils.isInsideRegion(bossPosition, HYUGA_ARENA_REGION_MIN, HYUGA_ARENA_REGION_MAX) then
+                if not State.hyugaArenaUnsafe then
+                    State.hyugaArenaUnsafe = true
+                    State.hyugaArenaUnsafeSince = tick()
+                    Utils.log("Hyuga left arena. Holding escape spot.")
+                end
+
+                Safety.setForcedPosition(HYUGA_ARENA_ESCAPE_SPOT, 0.25, HYUGA_ARENA_ESCAPE_PRIORITY, "Hyuga arena unsafe")
+
+                local playerData = Utils.getPlayerData()
+                if playerData then
+                    local dist = (playerData.rootPart.Position - HYUGA_ARENA_ESCAPE_SPOT).Magnitude
+                    if dist > 12 and (tick() - lastEscapeTeleport) >= 0.2 then
+                        lastEscapeTeleport = tick()
+                        Utils.safeTeleport(CFrame.new(HYUGA_ARENA_ESCAPE_SPOT))
+                    else
+                        playerData.rootPart.CFrame = CFrame.new(HYUGA_ARENA_ESCAPE_SPOT)
+                    end
+                end
+
+                if tick() - State.hyugaArenaUnsafeSince >= 30 then
+                    State.hyugaArenaTimeoutRequested = true
+                    State.skippedBossUntil["Hyuga Boss"] = tick() + 30
+                    Utils.log("Hyuga stayed outside arena for 30s. Skipping.", "warn")
+                    return
+                end
+            elseif State.hyugaArenaUnsafe then
+                State.hyugaArenaUnsafe = false
+                State.hyugaArenaUnsafeSince = 0
+                Safety.clearForcedPosition("Hyuga arena unsafe")
+            end
+
+            RunService.Heartbeat:Wait()
         end
         State.hyugaInVoid = false
+        State.hyugaArenaUnsafe = false
+        State.hyugaArenaUnsafeSince = 0
+        Safety.clearForcedPosition("Hyuga arena unsafe")
     end))
     
     -- Hyuga dangerous animations
@@ -1719,7 +1901,7 @@ function AnimMonitors.setupWoodenGolem(model, config)
                 return
             end
 
-            Safety.setForcedPosition(currentSpot, WOODEN_GOLEM_TWEEN_DURATION + 0.05, WOODEN_GOLEM_DODGE_PRIORITY, "Wooden Golem danger")
+            Safety.setForcedPosition(currentSpot, WOODEN_GOLEM_TWEEN_DURATION + 0.01, WOODEN_GOLEM_DODGE_PRIORITY, "Wooden Golem danger")
             local playerData = Utils.getPlayerData()
             if playerData then
                 playerData.rootPart.CFrame = CFrame.new(currentSpot)
@@ -1817,11 +1999,16 @@ function AnimMonitors.setupRingedSamurai(model)
         if not State.running then return end
         local assetId = track.Animation.AnimationId:match("rbxassetid://(%d+)") or track.Animation.AnimationId
         if assetId == "137738911755203" then
-            State.bossHeightBoost = -100
+            local currentRunId = State.runId
             Utils.addThread(task.spawn(function()
-                while track and track.IsPlaying and State.running do task.wait(0.1) end
-                task.wait(0.35)
-                State.bossHeightBoost = 0
+                Safety.forceTeleport(HYUGA_ARENA_ESCAPE_SPOT)
+                while track and track.IsPlaying and State.running and State.runId == currentRunId and State.currentBoss == "The Ringed Samurai" do
+                    Safety.setForcedPosition(HYUGA_ARENA_ESCAPE_SPOT, 0.2, RINGED_SAMURAI_DODGE_PRIORITY, "Ringed Samurai danger")
+                    task.wait()
+                end
+                if State.runId == currentRunId and State.currentBoss == "The Ringed Samurai" then
+                    Safety.setForcedPosition(HYUGA_ARENA_ESCAPE_SPOT, 0.35, RINGED_SAMURAI_DODGE_PRIORITY, "Ringed Samurai danger")
+                end
             end))
         end
     end))
@@ -1831,6 +2018,9 @@ end
 function AnimMonitors.setup(model, bossName, config)
     State.bossHeightBoost = 0
     State.hyugaInVoid = false
+    State.hyugaArenaUnsafe = false
+    State.hyugaArenaUnsafeSince = 0
+    State.hyugaArenaTimeoutRequested = false
     State.hakuSafeSpot = false
     Safety.clearForcedPosition()
     
@@ -2268,7 +2458,7 @@ function Combat.startAttacking(model)
     State.attackThread = task.spawn(function()
         local dataEvent = GetDataEvent()
         while State.running and State.currentBoss and not State.evacuating and State.runId == currentRunId do
-            if State.mode ~= "engaging" or State.hyugaInVoid or Safety.getForcedPosition() then
+            if State.mode ~= "engaging" or State.hyugaInVoid or State.hyugaArenaUnsafe or Safety.getForcedPosition() then
                 task.wait(0.05)
                 continue
             end
@@ -2335,7 +2525,10 @@ function Positioning.startAnchoring(model, config)
             if not pData then return end
 
             -- Position logic
-            if State.hyugaInVoid then
+            if State.hyugaArenaUnsafe then
+                Safety.forceTeleport(HYUGA_ARENA_ESCAPE_SPOT)
+                return
+            elseif State.hyugaInVoid then
                 pData.rootPart.CFrame = CFrame.new(HYUGA_VOID_SAFE_SPOT)
             else
                 local forced = Safety.getForcedPosition()
@@ -2362,20 +2555,6 @@ function Positioning.startAnchoring(model, config)
                         bossRoot.Position
                     )
                 end
-                
-                -- Anti-Snipe / Anti-Void Fall System
-                -- Prevents the game from killing us after 11.5 seconds of floating without touching ground
-                if not State.antiSnipePart then
-                    State.antiSnipePart = Instance.new("Part")
-                    State.antiSnipePart.Size = Vector3.new(10, 3, 10)
-                    State.antiSnipePart.Anchored = true
-                    State.antiSnipePart.CanCollide = true
-                    State.antiSnipePart.Transparency = 1
-                    State.antiSnipePart.Parent = workspace
-                end
-                -- Set to -3.1 instead of -3.2 to slightly embed the player's feet, guaranteeing the physics engine registers "Landed" status.
-                State.antiSnipePart.CFrame = pData.rootPart.CFrame * CFrame.new(0, -3.1, 0)
-                pcall(function() pData.humanoid:ChangeState(Enum.HumanoidStateType.Landed) end)
             end
         end)
     end)
@@ -2545,6 +2724,12 @@ function Farm.farmBoss(hum, model, bossName)
     while State.running and not State.evacuating and State.currentBoss == bossName do
         local cPData = Utils.getPlayerData()
         if not cPData then break end
+
+        if bossName == "Hyuga Boss" and State.hyugaArenaTimeoutRequested then
+            Utils.notify("Hyuga left arena too long. Skipping...", 3)
+            Farm.stopCurrent()
+            return "skipped"
+        end
         
         -- Check if boss died (either directly or via anchor flag from Kamui/model destruction)
         local bossDead = State.bossDeathDetected
@@ -2608,9 +2793,6 @@ function Farm.farmBoss(hum, model, bossName)
                 local dist = Vector3.new(regenData.rootPart.Position.X - safeSpot.X, 0, regenData.rootPart.Position.Z - safeSpot.Z).Magnitude
                 if dist > 30 then
                     regenData.rootPart.CFrame = CFrame.new(safeSpot)
-                else
-                    -- Walk randomly at safe spot (looks natural if a mod is watching)
-                    Utils.randomWalkAt(safeSpot, 6)
                 end
                 
                 if regenData.humanoid.Health >= regenData.humanoid.MaxHealth then
@@ -2672,12 +2854,14 @@ function Farm.stopCurrent()
     if State.anchorConn then State.anchorConn:Disconnect(); State.anchorConn = nil end
     if State.attackThread then pcall(task.cancel, State.attackThread); State.attackThread = nil end
     if State.knockedThread then pcall(task.cancel, State.knockedThread); State.knockedThread = nil end
-    if State.antiSnipePart then pcall(function() State.antiSnipePart:Destroy() end); State.antiSnipePart = nil end
     -- Worker cleanup is split: combat threads stop here, threat workers live under Safety.stopWorkers().
     
     -- Reset per-boss state
     State.bossHeightBoost = 0
     State.hyugaInVoid = false
+    State.hyugaArenaUnsafe = false
+    State.hyugaArenaUnsafeSince = 0
+    State.hyugaArenaTimeoutRequested = false
     State.hakuSafeSpot = false
     State.weaponHeightBoost = 0
     State.inDanger = false
