@@ -58,7 +58,7 @@ BossFarm.Settings = {
 -- WEAPON CONFIGS
 -- ============================================
 local WEAPON_KEYWORDS = {
-    "kunai", "asumai", "katana", "zabunagi", "resanagi", "haldberd", "gunbai"
+    "kunai", "asumai", "katana", "zabunagi", "resanagi", "haldberd", "gunbai", "executioner", "samehada"
 }
 
 -- ============================================

@@ -435,6 +435,23 @@ local function isChakraSenseDuringForcefield()
     return not safe, reason
 end
 
+local function hopImmediatelyForLoginDanger(reason)
+    print("[PuppyHub] Unsafe during login: " .. tostring(reason) .. ". Hopping instantly with no reposition.")
+
+    if AutoFarmHandler and AutoFarmHandler.emergencyStop then
+        AutoFarmHandler.emergencyStop()
+    end
+    StopMovementLoops()
+
+    if AutoFarmHandler and AutoFarmHandler.executeServerHop then
+        AutoFarmHandler.executeServerHop()
+        return true
+    end
+
+    warn("[PuppyHub] AutoFarmHandler.executeServerHop unavailable during login danger.")
+    return false
+end
+
 -- Waits until chakra sense / danger clears, or hops if configured
 -- Returns false if we hopped (caller should abort), true if safe to continue
 local function waitForSafety(root, instantHop)
@@ -459,6 +476,27 @@ local function waitForSafety(root, instantHop)
             return false
         end
         
+        task.wait(0.5)
+    end
+end
+
+waitForSafety = function(root, instantHop)
+    local unsafeStart = tick()
+    while true do
+        local unsafe, reason = isChakraSenseDuringForcefield()
+        if not unsafe then return true end
+
+        if instantHop then
+            hopImmediatelyForLoginDanger(reason)
+            return false
+        end
+
+        if tick() - unsafeStart > 15 and Config.ServerHopOnDanger and AutoFarmHandler and AutoFarmHandler.executeServerHop then
+            print("[PuppyHub] Danger persisted 15s during forcefield: " .. tostring(reason) .. ". Hopping...")
+            AutoFarmHandler.executeServerHop()
+            return false
+        end
+
         task.wait(0.5)
     end
 end
@@ -555,6 +593,10 @@ local function AutoLoginRoutine()
     
     if AutoFarmHandler and AutoFarmHandler.checkSafety then
         local safe, reason = AutoFarmHandler.checkSafety()
+        if not safe then
+            hopImmediatelyForLoginDanger(reason)
+            return
+        end
         if not safe then
             if Config.ServerHopOnDanger then
                 print("[PuppyHub] ⚠️ Unsafe before tween: " .. tostring(reason) .. ". Hopping INSTANTLY...")
