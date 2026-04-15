@@ -1528,7 +1528,7 @@ function Safety.startWorkers()
     Utils.addWorkerConnection(Players.PlayerRemoving:Connect(function(player)
         Safety.destroyPlayerWatcher(player)
     end))
-
+ 
     Utils.addWorkerThread(task.spawn(function()
         while State.workersActive do
             Safety.updateThreatCache()
