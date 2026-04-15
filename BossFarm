@@ -252,8 +252,11 @@ local State = {
     workersActive = false,
     serverHopInProgress = false,
     deathQuitTriggered = false,
+    deathCheckInProgress = false,
+    deathCheckToken = 0,
     lastIncomingDamageAt = 0,
     lastKnownHealth = 0,
+    lifeForceBaseline = nil,
     forcedPosition = nil,
     skippedBossUntil = {},
     hideState = {
@@ -454,6 +457,28 @@ function Utils.randomWalkAt(spot, radius)
     pcall(function()
         pData.humanoid:MoveTo(targetPos)
     end)
+end
+
+function Utils.getLifeForceValue()
+    local value = nil
+
+    pcall(function()
+        local clientGui = PlayerGui:FindFirstChild("ClientGui")
+        local mainframe = clientGui and clientGui:FindFirstChild("Mainframe")
+        local loadout = mainframe and mainframe:FindFirstChild("Loadout")
+        local hud = loadout and loadout:FindFirstChild("HUD")
+        local lifeForceFrame = hud and hud:FindFirstChild("LifeForce")
+        local lifeForceLabel = lifeForceFrame and lifeForceFrame:FindFirstChild("LifeForce")
+        local text = lifeForceLabel and lifeForceLabel.Text or nil
+        if type(text) == "string" then
+            local numberText = text:match("(%d+)")
+            if numberText then
+                value = tonumber(numberText)
+            end
+        end
+    end)
+
+    return value
 end
 
 -- ============================================
@@ -1115,7 +1140,7 @@ function Safety.startLocalCharacterWatcher()
                 Safety.handleIncomingDamage(health)
             end))
             table.insert(State.localCharacterStatusConnections, humanoid.Died:Connect(function()
-                Safety.quitForDeath()
+                Safety.scheduleDeathCheck("Humanoid.Died fired")
             end))
         end
 
@@ -1339,6 +1364,28 @@ function Safety.swapHideSpot(reason)
     return true
 end
 
+function Safety.captureLifeForceBaseline()
+    local currentLifeForce = Utils.getLifeForceValue()
+    if currentLifeForce ~= nil then
+        State.lifeForceBaseline = currentLifeForce
+    end
+end
+
+function Safety.pauseForDeathCheck()
+    State.deathCheckInProgress = true
+    Charging.stop()
+    if State.anchorConn then State.anchorConn:Disconnect(); State.anchorConn = nil end
+    if State.attackThread then pcall(task.cancel, State.attackThread); State.attackThread = nil end
+    if State.knockedThread then pcall(task.cancel, State.knockedThread); State.knockedThread = nil end
+    Utils.disconnectAll()
+    Utils.cancelAllThreads()
+    Utils.setMode("idle")
+end
+
+function Safety.resumeAfterDeathCheck()
+    State.deathCheckInProgress = false
+end
+
 function Safety.quitForDeath()
     if State.deathQuitTriggered then return end
     if not (State.workersActive or State.running or BossFarm.Settings.Enabled or BossFarm.Settings.BossLoopEnabled or State.hideState.active or State.mode == "hopping") then
@@ -1368,6 +1415,36 @@ function Safety.quitForDeath()
     end)
 end
 
+function Safety.scheduleDeathCheck(reason)
+    if State.deathQuitTriggered then return end
+
+    State.deathCheckToken = State.deathCheckToken + 1
+    local currentToken = State.deathCheckToken
+
+    if not State.deathCheckInProgress then
+        Utils.log("Suspected death detected: " .. tostring(reason))
+        Safety.pauseForDeathCheck()
+    end
+
+    task.delay(0.3, function()
+        if State.deathQuitTriggered or State.deathCheckToken ~= currentToken then
+            return
+        end
+
+        local currentLifeForce = Utils.getLifeForceValue()
+        local baselineLifeForce = State.lifeForceBaseline
+
+        if currentLifeForce ~= nil and baselineLifeForce ~= nil and currentLifeForce < baselineLifeForce then
+            Utils.log("LifeForce dropped from " .. tostring(baselineLifeForce) .. " to " .. tostring(currentLifeForce) .. ".", "warn")
+            Safety.quitForDeath()
+            return
+        end
+
+        Utils.log("Death check cleared. LifeForce unchanged.", "warn")
+        Safety.resumeAfterDeathCheck()
+    end)
+end
+
 function Safety.handleIncomingDamage(newHealth)
     local previousHealth = State.lastKnownHealth or newHealth or 0
     State.lastKnownHealth = newHealth or previousHealth
@@ -1377,7 +1454,7 @@ function Safety.handleIncomingDamage(newHealth)
     end
 
     if newHealth <= 0 then
-        Safety.quitForDeath()
+        Safety.scheduleDeathCheck("Health reached 0")
         return
     end
 
@@ -1530,7 +1607,10 @@ function Safety.startWorkers()
     State.threatCache = newThreatCache()
     State.serverHopInProgress = false
     State.deathQuitTriggered = false
+    State.deathCheckInProgress = false
+    State.deathCheckToken = 0
     State.lastIncomingDamageAt = 0
+    Safety.captureLifeForceBaseline()
 
     Safety.startLocalCharacterWatcher()
     for _, player in ipairs(Players:GetPlayers()) do
@@ -2496,7 +2576,7 @@ function Combat.startAttacking(model)
     State.attackThread = task.spawn(function()
         local dataEvent = GetDataEvent()
         while State.running and State.currentBoss and not State.evacuating and State.runId == currentRunId do
-            if State.mode ~= "engaging" or State.hyugaInVoid or State.hyugaArenaUnsafe or Safety.getForcedPosition() then
+            if State.deathCheckInProgress or State.mode ~= "engaging" or State.hyugaInVoid or State.hyugaArenaUnsafe or Safety.getForcedPosition() then
                 task.wait(0.05)
                 continue
             end
@@ -2543,6 +2623,7 @@ function Positioning.startAnchoring(model, config)
             -- ABSOLUTE SAFETY: if evacuating, do NOTHING
             if State.evacuating then return end
             if not State.running then return end
+            if State.deathCheckInProgress then return end
             if State.mode == "hiding" or State.mode == "hopping" then return end
             
             -- If we're currently looting, don't reposition
