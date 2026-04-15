@@ -852,6 +852,7 @@ local function newHideState()
         startedAt = 0,
         lastDangerAt = 0,
         hopDeadline = 0,
+        hardHoldUntil = 0,
         wasLoop = false,
         resumeSingle = false,
         resumeIndex = 0,
@@ -1332,6 +1333,7 @@ function Safety.swapHideSpot(reason)
     State.hideState.spot = alternateSpot
     State.hideState.lastSwapAt = now
     State.hideState.lastDangerAt = now
+    State.hideState.hardHoldUntil = now + 0.15
     Utils.log("Swapping hide spot: " .. tostring(reason or "Unknown"))
     Safety.forceTeleport(alternateSpot)
     return true
@@ -1484,6 +1486,7 @@ function Safety.enterHide(reason)
         startedAt = now,
         lastDangerAt = now,
         hopDeadline = now + (BossFarm.Settings.HideThreatTimeout or 30),
+        hardHoldUntil = now + 0.15,
         wasLoop = wasLoop,
         resumeSingle = resumeSingle,
         resumeIndex = resumeIndex,
@@ -1571,9 +1574,12 @@ function Safety.startWorkers()
                 local currentPos = playerData.rootPart.Position
                 local horizontalDist = Vector3.new(currentPos.X - hideSpot.X, 0, currentPos.Z - hideSpot.Z).Magnitude
                 local recentDamage = State.lastIncomingDamageAt ~= 0 and tick() - State.lastIncomingDamageAt <= 1
+                local hardHoldActive = (State.hideState.hardHoldUntil or 0) > tick()
                 local softHide = Safety.isSenseOnlyHide(State.hideState.reason) and not recentDamage
 
-                if softHide then
+                if hardHoldActive then
+                    playerData.rootPart.CFrame = CFrame.new(hideSpot)
+                elseif softHide then
                     if horizontalDist > 35 then
                         playerData.rootPart.CFrame = CFrame.new(hideSpot)
                     else
