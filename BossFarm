@@ -1554,7 +1554,7 @@ function Safety.startWorkers()
                 hideSpot = State.hideState.spot
             end
 
-            if playerData and hideSpot then
+            if playerData and hideSpot and not State.hideState.hopStarted then
                 playerData.rootPart.CFrame = CFrame.new(hideSpot)
             end
 
