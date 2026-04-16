@@ -174,7 +174,6 @@ local TRINKET_VALUES = {
 -- ============================================
 local SECRET_SPOT = Vector3.new(-3933, 1120, -4571)
 local SECRET_SPOT_BACKUP = Vector3.new(-2605.41016, 629.647888, -5373.87207)
-local HYUGA_VOID_SAFE_SPOT = Vector3.new(-700.8, -334.3, -780.8)
 local HYUGA_DANGER_DODGE_SPOT = Vector3.new(-1469.2, -359.9, -9610.4)
 local HYUGA_ARENA_ESCAPE_SPOT = HYUGA_DANGER_DODGE_SPOT
 local HYUGA_ARENA_REGION_MIN = Vector3.new(-748.399169921875, -367.0005187988281, -846.8639526367188)
@@ -225,8 +224,6 @@ local State = {
     weaponHeightBoost = 0,
     -- Per-boss height boosts (dynamic, change during animations)
     bossHeightBoost = 0,
-    -- Hyuga void
-    hyugaInVoid = false,
     hyugaArenaUnsafe = false,
     hyugaArenaUnsafeSince = 0,
     hyugaArenaTimeoutRequested = false,
@@ -1890,17 +1887,10 @@ function AnimMonitors.setupGeneric(model, config)
     end))
 end
 
--- Hyuga Boss: void zone detection + dangerous animation dodge
+-- Hyuga Boss: arena enforcement + dangerous animation dodge
 function AnimMonitors.setupHyuga(model)
     local bossRoot = model:FindFirstChild("HumanoidRootPart")
     if not bossRoot then return end
-    
-    -- Void zone monitor
-    local function isInHyugaVoidZone(pos)
-        return pos.X >= -826.4 and pos.X <= -524.0
-            and pos.Y >= -454.8 and pos.Y <= -450.8
-            and pos.Z >= -927.1 and pos.Z <= -621.1
-    end
     
     Utils.addThread(task.spawn(function()
         -- Initial approach height reduction
@@ -1915,11 +1905,22 @@ function AnimMonitors.setupHyuga(model)
 
         while State.running and model and model.Parent and State.runId == currentRunId do
             local bossPosition = bossRoot.Position
-            local inVoid = isInHyugaVoidZone(bossPosition)
-            if inVoid and not State.hyugaInVoid then
-                State.hyugaInVoid = true
-            elseif not inVoid and State.hyugaInVoid then
-                State.hyugaInVoid = false
+            local playerData = Utils.getPlayerData()
+            local playerPosition = playerData and playerData.rootPart.Position or nil
+            local playerOutsideArena = false
+
+            if playerData and State.currentBoss == "Hyuga Boss" then
+                if not Utils.isInsideRegion(playerPosition, HYUGA_ARENA_REGION_MIN, HYUGA_ARENA_REGION_MAX) then
+                    playerOutsideArena = true
+                else
+                    for i = 1, #State.characterBaseParts do
+                        local part = State.characterBaseParts[i]
+                        if part and part.Parent and not Utils.isInsideRegion(part.Position, HYUGA_ARENA_REGION_MIN, HYUGA_ARENA_REGION_MAX) then
+                            playerOutsideArena = true
+                            break
+                        end
+                    end
+                end
             end
 
             if not Utils.isInsideRegion(bossPosition, HYUGA_ARENA_REGION_MIN, HYUGA_ARENA_REGION_MAX) then
@@ -1931,7 +1932,6 @@ function AnimMonitors.setupHyuga(model)
 
                 Safety.setForcedPosition(HYUGA_ARENA_ESCAPE_SPOT, 0.25, HYUGA_ARENA_ESCAPE_PRIORITY, "Hyuga arena unsafe")
 
-                local playerData = Utils.getPlayerData()
                 if playerData then
                     local dist = (playerData.rootPart.Position - HYUGA_ARENA_ESCAPE_SPOT).Magnitude
                     if dist > 12 and (tick() - lastEscapeTeleport) >= 0.2 then
@@ -1948,6 +1948,21 @@ function AnimMonitors.setupHyuga(model)
                     Utils.log("Hyuga stayed outside arena for 30s. Skipping.", "warn")
                     return
                 end
+            elseif playerData
+                and playerOutsideArena
+                and State.mode == "engaging"
+                and not State.evacuating
+                and not State.hideState.active
+                and not State.serverHopInProgress
+                and not Safety.getForcedPosition()
+                then
+                if tick() - lastEscapeTeleport >= 0.2 then
+                    lastEscapeTeleport = tick()
+                    Utils.log("Player body left Hyuga arena. Pulling back to safe spot.")
+                    Utils.safeTeleport(CFrame.new(HYUGA_ARENA_ESCAPE_SPOT))
+                else
+                    playerData.rootPart.CFrame = CFrame.new(HYUGA_ARENA_ESCAPE_SPOT)
+                end
             elseif State.hyugaArenaUnsafe then
                 State.hyugaArenaUnsafe = false
                 State.hyugaArenaUnsafeSince = 0
@@ -1956,7 +1971,6 @@ function AnimMonitors.setupHyuga(model)
 
             RunService.Heartbeat:Wait()
         end
-        State.hyugaInVoid = false
         State.hyugaArenaUnsafe = false
         State.hyugaArenaUnsafeSince = 0
         Safety.clearForcedPosition("Hyuga arena unsafe")
@@ -2148,7 +2162,6 @@ end
 -- Setup all animation monitors for a given boss
 function AnimMonitors.setup(model, bossName, config)
     State.bossHeightBoost = 0
-    State.hyugaInVoid = false
     State.hyugaArenaUnsafe = false
     State.hyugaArenaUnsafeSince = 0
     State.hyugaArenaTimeoutRequested = false
@@ -2589,7 +2602,7 @@ function Combat.startAttacking(model)
     State.attackThread = task.spawn(function()
         local dataEvent = GetDataEvent()
         while State.running and State.currentBoss and not State.evacuating and State.runId == currentRunId do
-            if State.deathCheckInProgress or State.mode ~= "engaging" or State.hyugaInVoid or State.hyugaArenaUnsafe or Safety.getForcedPosition() then
+            if State.deathCheckInProgress or State.mode ~= "engaging" or State.hyugaArenaUnsafe or Safety.getForcedPosition() then
                 task.wait(0.05)
                 continue
             end
@@ -2660,8 +2673,6 @@ function Positioning.startAnchoring(model, config)
             if State.hyugaArenaUnsafe then
                 Safety.forceTeleport(HYUGA_ARENA_ESCAPE_SPOT)
                 return
-            elseif State.hyugaInVoid then
-                pData.rootPart.CFrame = CFrame.new(HYUGA_VOID_SAFE_SPOT)
             else
                 local forced = Safety.getForcedPosition()
                 if forced then
@@ -2991,7 +3002,6 @@ function Farm.stopCurrent()
     
     -- Reset per-boss state
     State.bossHeightBoost = 0
-    State.hyugaInVoid = false
     State.hyugaArenaUnsafe = false
     State.hyugaArenaUnsafeSince = 0
     State.hyugaArenaTimeoutRequested = false
