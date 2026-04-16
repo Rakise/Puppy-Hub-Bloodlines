@@ -3185,16 +3185,33 @@ function Farm.farmBoss(hum, model, bossName)
             local safeSpot = Safety.getSafeSpot() or SECRET_SPOT 
             local pd = Utils.getPlayerData()
             if pd then Utils.safeTeleport(CFrame.new(safeSpot)) end
+            Utils.recordEvent("Regen Start", bossName .. " -> " .. Utils.formatVector3(safeSpot))
             
             -- Wait until HP is back to 100% (or farm is stopped)
             Utils.log("Waiting for HP to regen to 100%...")
             while State.running do
                 local regenData = Utils.getPlayerData()
                 if not regenData then break end
-                
-                -- Enforce TP if game rubberbands us horizontally far away (ignore Y for gravity)
-                local dist = Vector3.new(regenData.rootPart.Position.X - safeSpot.X, 0, regenData.rootPart.Position.Z - safeSpot.Z).Magnitude
-                if dist > 30 then
+
+                local cache = State.threatCache or {}
+                local hasThreat = cache.senseActive or cache.nearby
+                local rootPos = regenData.rootPart.Position
+                local horizontalDist = Vector3.new(rootPos.X - safeSpot.X, 0, rootPos.Z - safeSpot.Z).Magnitude
+                local verticalDelta = rootPos.Y - safeSpot.Y
+
+                if hasThreat then
+                    if horizontalDist > 12 or math.abs(verticalDelta) > 8 then
+                        Utils.recordEvent("Regen Threat Release", string.format("sense=%s nearby=%s h=%.1f y=%.1f",
+                            tostring(cache.sensePlayer or "None"),
+                            tostring(cache.nearbyPlayer or "None"),
+                            horizontalDist,
+                            verticalDelta
+                        ))
+                    end
+                else
+                    if horizontalDist > 2 or math.abs(verticalDelta) > 2 then
+                        Utils.recordEvent("Regen Hold", string.format("h=%.1f y=%.1f", horizontalDist, verticalDelta))
+                    end
                     regenData.rootPart.CFrame = CFrame.new(safeSpot)
                 end
                 
@@ -3204,7 +3221,7 @@ function Farm.farmBoss(hum, model, bossName)
                     break
                 end
                 
-                task.wait(BossFarm.Settings.HealthCheckInterval)
+                task.wait(0.05)
             end
             
             -- After regen, DON'T break — re-enter the loop to re-engage the SAME boss
