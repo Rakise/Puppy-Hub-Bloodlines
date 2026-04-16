@@ -174,7 +174,7 @@ local TRINKET_VALUES = {
 -- ============================================
 local SECRET_SPOT = Vector3.new(-3933, 1120, -4571)
 local SECRET_SPOT_BACKUP = Vector3.new(-2605.41016, 629.647888, -5373.87207)
-local HYUGA_DANGER_DODGE_SPOT = Vector3.new(-1469.2, -359.9, -9610.4)
+local HYUGA_DANGER_DODGE_SPOT = Vector3.new(-1469.2, -100, -9610.4)
 local HYUGA_ARENA_ESCAPE_SPOT = HYUGA_DANGER_DODGE_SPOT
 local HYUGA_ARENA_REGION_MIN = Vector3.new(-748.399169921875, -367.0005187988281, -846.8639526367188)
 local HYUGA_ARENA_REGION_MAX = Vector3.new(-599.4711303710938, -269.55303955078125, -693.4671630859375)
@@ -186,7 +186,7 @@ local WOODEN_GOLEM_DODGE_SPOTS = {
     Vector3.new(-4727.5517578125, 336.9197692871094, -3005.190673828125),
 }
 local WOODEN_GOLEM_DODGE_DURATION = 6.7
-local WOODEN_GOLEM_TWEEN_DURATION = 0.01
+local WOODEN_GOLEM_TWEEN_DURATION = 0.2
 -- ============================================
 -- CHARGE ANIMATION
 -- ============================================
@@ -255,6 +255,7 @@ local State = {
     lastKnownHealth = 0,
     lifeForceBaseline = nil,
     forcedPosition = nil,
+    combatStabilizeUntil = 0,
     skippedBossUntil = {},
     hideState = {
         active = false,
@@ -1990,11 +1991,11 @@ function AnimMonitors.setupHyuga(model)
             local currentRunId = State.runId
             Utils.addThread(task.spawn(function()
                 while track and track.IsPlaying and State.running and State.runId == currentRunId and State.currentBoss == "Hyuga Boss" do
-                    Safety.setForcedPosition(HYUGA_DANGER_DODGE_SPOT, 0.2, HYUGA_DODGE_PRIORITY, "Hyuga danger")
+                    Safety.setForcedPosition(HYUGA_DANGER_DODGE_SPOT, 0.4, HYUGA_DODGE_PRIORITY, "Hyuga danger")
                     task.wait()
                 end
                 if State.runId == currentRunId then
-                    Safety.setForcedPosition(HYUGA_DANGER_DODGE_SPOT, 0.35, HYUGA_DODGE_PRIORITY, "Hyuga danger")
+                    Safety.setForcedPosition(HYUGA_DANGER_DODGE_SPOT, 0.6, HYUGA_DODGE_PRIORITY, "Hyuga danger")
                 end
             end))
         end
@@ -2643,6 +2644,49 @@ end
 -- ============================================
 local Positioning = {}
 
+function Positioning.getMinimumCombatOffset(playerRoot, bossRoot)
+    local playerHalfHeight = (playerRoot and playerRoot.Size and playerRoot.Size.Y or 4) * 0.5
+    local bossHalfHeight = (bossRoot and bossRoot.Size and bossRoot.Size.Y or 8) * 0.5
+    return bossHalfHeight + playerHalfHeight + 4
+end
+
+function Positioning.getCombatCFrame(playerRoot, bossRoot, config)
+    if not playerRoot or not bossRoot or not config then return nil end
+
+    local baseHeight = (config.height or 15) + (State.weaponHeightBoost or 0)
+    local totalHeight = baseHeight + (State.bossHeightBoost or 0)
+    local minimumOffset = Positioning.getMinimumCombatOffset(playerRoot, bossRoot)
+
+    if tick() < (State.combatStabilizeUntil or 0) then
+        minimumOffset = minimumOffset + 6
+    end
+
+    if not config.positionAbove and (State.bossHeightBoost or 0) > 0 then
+        local dodgeHeight = math.max(math.abs(baseHeight), minimumOffset)
+        return CFrame.new(bossRoot.Position + Vector3.new(1000, -dodgeHeight, 0))
+    end
+
+    local direction = config.positionAbove and 1 or -1
+    local safeHeight = math.max(math.abs(totalHeight), minimumOffset)
+    local targetPosition = bossRoot.Position + Vector3.new(0, direction * safeHeight, 0)
+    return CFrame.lookAt(targetPosition, bossRoot.Position)
+end
+
+function Positioning.primeCombatOffsets(model, config)
+    State.combatStabilizeUntil = tick() + 0.35
+
+    local playerData = Utils.getPlayerData()
+    local bossRoot = Utils.getBossRoot(model)
+    if not playerData or not playerData.rootPart or not bossRoot then
+        return
+    end
+
+    local initialCFrame = Positioning.getCombatCFrame(playerData.rootPart, bossRoot, config)
+    if initialCFrame then
+        playerData.rootPart.CFrame = initialCFrame
+    end
+end
+
 function Positioning.startAnchoring(model, config)
     State.anchorConn = RunService.Heartbeat:Connect(function()
         pcall(function()
@@ -2680,23 +2724,9 @@ function Positioning.startAnchoring(model, config)
                     return
                 end
 
-                local totalHeight = (config.height or 15)
-                    + State.weaponHeightBoost
-                
-                -- For below-bosses (positionAbove = false), dodge horizontally instead of going deeper
-                -- Going further down would fall into the void under the arena
-                if not config.positionAbove and State.bossHeightBoost > 0 then
-                    -- Horizontal dodge: 1000 studs away on X axis, same Y level
-                    local dodgePos = bossRoot.Position + Vector3.new(1000, -totalHeight, 0)
-                    pData.rootPart.CFrame = CFrame.new(dodgePos)
-                else
-                    totalHeight = totalHeight + State.bossHeightBoost
-                    local yOffset = config.positionAbove and totalHeight or -totalHeight
-                    
-                    pData.rootPart.CFrame = CFrame.lookAt(
-                        bossRoot.Position + Vector3.new(0, yOffset, 0),
-                        bossRoot.Position
-                    )
+                local combatCFrame = Positioning.getCombatCFrame(pData.rootPart, bossRoot, config)
+                if combatCFrame then
+                    pData.rootPart.CFrame = combatCFrame
                 end
             end
         end)
@@ -2847,6 +2877,7 @@ function Farm.farmBoss(hum, model, bossName)
     
     -- Setup per-boss animation monitors
     AnimMonitors.setup(model, bossName, config)
+    Positioning.primeCombatOffsets(model, config)
     
     -- Monitor knocked state for auto-grip
     Knocked.monitor(model)
@@ -2968,6 +2999,7 @@ function Farm.farmBoss(hum, model, bossName)
                     
                     Weapons.updateBoost()
                     AnimMonitors.setup(model, bossName, config)
+                    Positioning.primeCombatOffsets(model, config)
                     Knocked.monitor(model)
                     task.wait(0.5)
                     Charging.start()
@@ -3007,6 +3039,7 @@ function Farm.stopCurrent()
     State.hyugaArenaTimeoutRequested = false
     State.hakuSafeSpot = false
     State.weaponHeightBoost = 0
+    State.combatStabilizeUntil = 0
     State.inDanger = false
     State.bossDeathDetected = false
     Safety.clearForcedPosition()
