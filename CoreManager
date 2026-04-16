@@ -171,7 +171,15 @@ local function StartMovementLoops()
                 end
                 if not found and player.Character then
                     for _, tool in ipairs(player.Character:GetChildren()) do
-                        if tool:IsA("Tool") and string.find(string.lower(tool.Name), "chakra sense") then found = true break end
+                        if tool:IsA("Tool") and string.find(string.lower(tool.Name), "sense") then found = true break end
+                    end
+                end
+                if not found then
+                    local backpack = player:FindFirstChildOfClass("Backpack")
+                    if backpack then
+                        for _, tool in ipairs(backpack:GetChildren()) do
+                            if tool:IsA("Tool") and string.find(string.lower(tool.Name), "sense") then found = true break end
+                        end
                     end
                 end
                 if found then break end
@@ -347,6 +355,7 @@ end
 local currentMouseTask = nil
 local VirtualInputManager = game:GetService("VirtualInputManager")
 local mouse = LocalPlayer:GetMouse()
+local ForceSenseHopOnBossFarmLogin = false
 
 local function moveMouseToGui(guiObject)
     local thisTask = coroutine.running()
@@ -428,8 +437,52 @@ local function clickMouse()
     end
 end
 
--- Checks if chakra sense is active (shared helper for forcefield logic)
+local function detectChakraSenseDanger()
+    local settingsFolder = ReplicatedStorage:FindFirstChild("Settings")
+
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer then
+            if settingsFolder then
+                local pSettings = settingsFolder:FindFirstChild(player.Name)
+                if pSettings then
+                    local sVal = pSettings:FindFirstChild("CurrentSkill")
+                    if sVal and type(sVal.Value) == "string" and string.find(string.lower(sVal.Value), "sense") then
+                        return true, "Chakra Sense (" .. player.Name .. ")"
+                    end
+                end
+            end
+
+            if player.Character then
+                for _, tool in ipairs(player.Character:GetChildren()) do
+                    if tool:IsA("Tool") and string.find(string.lower(tool.Name), "sense") then
+                        return true, "Chakra Sense Tool (" .. player.Name .. ")"
+                    end
+                end
+            end
+
+            local backpack = player:FindFirstChildOfClass("Backpack")
+            if backpack then
+                for _, tool in ipairs(backpack:GetChildren()) do
+                    if tool:IsA("Tool") and string.find(string.lower(tool.Name), "sense") then
+                        return true, "Chakra Sense Tool (" .. player.Name .. ")"
+                    end
+                end
+            end
+        end
+    end
+
+    return false, nil
+end
+
+-- Checks if login/tween safety is unsafe.
 local function isChakraSenseDuringForcefield()
+    if ForceSenseHopOnBossFarmLogin then
+        local foundSense, senseReason = detectChakraSenseDanger()
+        if foundSense then
+            return true, senseReason
+        end
+    end
+
     if not AutoFarmHandler or not AutoFarmHandler.checkSafety then return false end
     local safe, reason = AutoFarmHandler.checkSafety()
     return not safe, reason
@@ -700,6 +753,7 @@ if isfile and isfile(HOP_MARKER_FILE) then
 end
 
 local isFarmRedirect = isActualHop and (Config.AutoSummon or Config.BossFarmEnabled or Config.BossLoopEnabled)
+ForceSenseHopOnBossFarmLogin = isActualHop and (Config.BossFarmEnabled or Config.BossLoopEnabled)
 
 -- If NOT a farm redirect, clear visual toggles so they don't auto-enable on fresh join
 if not isFarmRedirect then

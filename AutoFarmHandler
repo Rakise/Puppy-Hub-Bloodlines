@@ -71,7 +71,6 @@ AutoFarmHandler.Settings = {
     DangerRadius = 300
 }
 
-local SETTINGS_FOLDER = ReplicatedStorage:FindFirstChild("Settings")
 local GAME_ID = 10266164381
 
 local State = {
@@ -120,6 +119,7 @@ function AutoFarmHandler.checkSafety()
     local myChar = LocalPlayer.Character
     local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
     if not myRoot then return true, nil end -- Can't check if not spawned
+    local settingsFolder = ReplicatedStorage:FindFirstChild("Settings")
 
     for _, player in ipairs(Players:GetPlayers()) do
         if player ~= LocalPlayer then
@@ -135,8 +135,8 @@ function AutoFarmHandler.checkSafety()
             -- 2. Chakra Sense (Conditional Check)
             if AutoFarmHandler.Settings.ServerHopOnChakraSense then
                 -- Replicated Settings Check
-                if SETTINGS_FOLDER then
-                    local pSettings = SETTINGS_FOLDER:FindFirstChild(player.Name)
+                if settingsFolder then
+                    local pSettings = settingsFolder:FindFirstChild(player.Name)
                     if pSettings then
                         local sVal = pSettings:FindFirstChild("CurrentSkill")
                         if sVal and type(sVal.Value) == "string" and string.find(string.lower(sVal.Value), "sense") then
@@ -148,6 +148,15 @@ function AutoFarmHandler.checkSafety()
                 -- Tool Check
                 if player.Character then
                     for _, tool in ipairs(player.Character:GetChildren()) do
+                        if tool:IsA("Tool") and string.find(string.lower(tool.Name), "sense") then
+                            return false, "Chakra Sense Tool (" .. player.Name .. ")"
+                        end
+                    end
+                end
+
+                local backpack = player:FindFirstChildOfClass("Backpack")
+                if backpack then
+                    for _, tool in ipairs(backpack:GetChildren()) do
                         if tool:IsA("Tool") and string.find(string.lower(tool.Name), "sense") then
                             return false, "Chakra Sense Tool (" .. player.Name .. ")"
                         end
