@@ -17,6 +17,7 @@ local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 
 local GAME_ID = 10266164381
 local HOP_MARKER_FILE = "PuppyHub_HopMarker.txt"
+local LOG_FILE = "PuppyHub_BossFarm_Log.txt"
 
 -- Cached remote references
 local function GetDataEvent()
@@ -301,6 +302,8 @@ local State = {
         backupSpotContested = false,
         updatedAt = 0,
     },
+    recentEvents = {},
+    logSessionStarted = false,
 }
 
 -- ============================================
@@ -308,9 +311,126 @@ local State = {
 -- ============================================
 local Utils = {}
 
+function Utils.appendLogLine(line)
+    if not writefile then return end
+
+    local text = tostring(line or "")
+    local ok = false
+
+    if appendfile then
+        ok = pcall(function()
+            appendfile(LOG_FILE, text .. "\n")
+        end)
+    end
+
+    if ok then return end
+
+    pcall(function()
+        local previous = ""
+        if isfile and isfile(LOG_FILE) and readfile then
+            previous = readfile(LOG_FILE)
+            if #previous > 0 and not previous:match("\n$") then
+                previous = previous .. "\n"
+            end
+        end
+        writefile(LOG_FILE, previous .. text .. "\n")
+    end)
+end
+
+function Utils.ensureLogSession()
+    if State.logSessionStarted then return end
+    State.logSessionStarted = true
+    Utils.appendLogLine(string.rep("=", 72))
+    Utils.appendLogLine(string.format("[%s] [SESSION] BossFarm loaded | place=%s | job=%s | player=%s",
+        os.date("%Y-%m-%d %H:%M:%S"),
+        tostring(game.PlaceId),
+        tostring(game.JobId),
+        tostring(LocalPlayer and LocalPlayer.Name or "?")
+    ))
+end
+
 function Utils.log(message, level)
     local prefix = "[Boss Farm]"
+    Utils.ensureLogSession()
+    Utils.appendLogLine(string.format("[%s] [%s] %s",
+        os.date("%Y-%m-%d %H:%M:%S"),
+        tostring(level == "warn" and "WARN" or "INFO"),
+        tostring(message)
+    ))
     if level == "warn" then warn(prefix, message) else print(prefix, message) end
+end
+
+function Utils.formatVector3(vec)
+    if not vec then return "nil" end
+    return string.format("(%.1f, %.1f, %.1f)", vec.X, vec.Y, vec.Z)
+end
+
+function Utils.recordEvent(label, details)
+    local entry = {
+        at = os.date("%H:%M:%S"),
+        label = tostring(label or "event"),
+        details = details and tostring(details) or nil,
+    }
+
+    table.insert(State.recentEvents, entry)
+    if #State.recentEvents > 12 then
+        table.remove(State.recentEvents, 1)
+    end
+
+    Utils.ensureLogSession()
+    Utils.appendLogLine(string.format("[%s] [EVENT] %s%s",
+        os.date("%Y-%m-%d %H:%M:%S"),
+        tostring(entry.label),
+        entry.details and (" | " .. tostring(entry.details)) or ""
+    ))
+end
+
+function Utils.getDebugSnapshot()
+    local pData = Utils.getPlayerData()
+    local forced = Safety and Safety.getForcedPosition and Safety.getForcedPosition() or nil
+    local currentBossRoot = Utils.getBossRoot(State.currentModel)
+    local lines = {
+        "**Mode:** " .. tostring(State.mode),
+        "**Boss:** " .. tostring(State.currentBoss or "None"),
+        "**Running:** " .. tostring(State.running) .. " | **Evacuating:** " .. tostring(State.evacuating) .. " | **Looting:** " .. tostring(State.isLooting),
+        "**Player HP:** " .. tostring(pData and math.floor(pData.humanoid.Health + 0.5) or "nil"),
+        "**LifeForce Baseline:** " .. tostring(State.lifeForceBaseline),
+        "**Player Pos:** " .. Utils.formatVector3(pData and pData.rootPart.Position or nil),
+        "**Boss Pos:** " .. Utils.formatVector3(currentBossRoot and currentBossRoot.Position or State.lastBossPosition),
+        "**Forced Pos:** " .. Utils.formatVector3(forced and forced.position or nil),
+        "**Forced Reason:** " .. tostring(forced and forced.reason or "None"),
+        "**Hide Reason:** " .. tostring(State.hideState and State.hideState.reason or "None"),
+        "**Nearby Threat:** " .. tostring(State.threatCache and State.threatCache.nearbyPlayer or "None"),
+        "**Sense Threat:** " .. tostring(State.threatCache and State.threatCache.sensePlayer or "None"),
+        "**Boss Contested:** " .. tostring(State.threatCache and State.threatCache.currentBossPlayer or "None"),
+        "**Hyuga Unsafe:** " .. tostring(State.hyugaArenaUnsafe),
+        "**Last Damage Age:** " .. string.format("%.2fs", math.max(0, tick() - (State.lastIncomingDamageAt or 0))),
+    }
+
+    if #State.recentEvents > 0 then
+        local history = {}
+        for _, event in ipairs(State.recentEvents) do
+            local line = "- `" .. tostring(event.at) .. "` " .. tostring(event.label)
+            if event.details and event.details ~= "" then
+                line = line .. " | " .. event.details
+            end
+            table.insert(history, line)
+        end
+        table.insert(lines, "**Recent Events:**\n" .. table.concat(history, "\n"))
+    end
+
+    return table.concat(lines, "\n")
+end
+
+function Utils.writeDebugSnapshot(reason)
+    Utils.ensureLogSession()
+    Utils.appendLogLine(string.format("[%s] [SNAPSHOT] %s",
+        os.date("%Y-%m-%d %H:%M:%S"),
+        tostring(reason or "No reason")
+    ))
+    for line in string.gmatch(Utils.getDebugSnapshot(), "[^\n]+") do
+        Utils.appendLogLine("  " .. line:gsub("%*%*", ""))
+    end
 end
 
 function Utils.notify(text, duration)
@@ -364,7 +484,8 @@ function Utils.safeTeleport(targetCFrame)
     -- Let physics engine fully register the Swim state before removing the bubble.
     task.wait(0.5)
     -- Remove the water
-    pcall(function() workspace.Terrain:FillBall(pos, 27, Enum.Material.Air) end) end
+    pcall(function() workspace.Terrain:FillBall(pos, 27, Enum.Material.Air) end)
+end
 function Utils.disconnectAll()
     for i = #State.connections, 1, -1 do
         local conn = State.connections[i]
@@ -452,6 +573,9 @@ function Utils.rebuildCharacterBaseParts(character)
 end
 
 function Utils.setMode(mode)
+    if State.mode ~= mode then
+        Utils.recordEvent("Mode", tostring(State.mode) .. " -> " .. tostring(mode))
+    end
     State.mode = mode
 end
 
@@ -1423,6 +1547,8 @@ function Safety.quitForDeath()
 
     State.deathQuitTriggered = true
     Utils.log("Character died. Quitting for safety.", "warn")
+    Utils.writeDebugSnapshot("quitForDeath")
+    Webhook.send("☠️ Death Debug", Utils.getDebugSnapshot(), 15158332)
 
     BossFarm.Settings.Enabled = false
     BossFarm.Settings.BossLoopEnabled = false
@@ -1449,6 +1575,7 @@ function Safety.scheduleDeathCheck(reason)
 
     State.deathCheckToken = State.deathCheckToken + 1
     local currentToken = State.deathCheckToken
+    Utils.recordEvent("Death Check", tostring(reason))
 
     if not State.deathCheckInProgress then
         Utils.log("Suspected death detected: " .. tostring(reason))
@@ -1465,11 +1592,13 @@ function Safety.scheduleDeathCheck(reason)
 
         if currentLifeForce ~= nil and baselineLifeForce ~= nil and currentLifeForce < baselineLifeForce then
             Utils.log("LifeForce dropped from " .. tostring(baselineLifeForce) .. " to " .. tostring(currentLifeForce) .. ".", "warn")
+            Utils.recordEvent("Death Confirmed", tostring(baselineLifeForce) .. " -> " .. tostring(currentLifeForce))
             Safety.quitForDeath()
             return
         end
 
         Utils.log("Death check cleared. LifeForce unchanged.", "warn")
+        Utils.recordEvent("Death Cleared", "LifeForce unchanged")
         Safety.resumeAfterDeathCheck()
     end)
 end
@@ -1489,6 +1618,7 @@ function Safety.handleIncomingDamage(newHealth)
 
     if newHealth < previousHealth then
         State.lastIncomingDamageAt = tick()
+        Utils.recordEvent("Damage", string.format("%.1f -> %.1f", previousHealth, newHealth))
         if State.hideState.active or State.evacuating or State.mode == "hopping" then
             Safety.swapHideSpot("Damage while evacuating")
         end
@@ -1500,6 +1630,9 @@ function Safety.clearForcedPosition(reasonMatch)
         return
     end
 
+    if State.forcedPosition then
+        Utils.recordEvent("Forced Clear", tostring(State.forcedPosition.reason or "Unknown"))
+    end
     State.forcedPosition = nil
     if State.mode == "dodging" then
         if State.running and State.currentBoss and not State.hideState.active then
@@ -1537,6 +1670,7 @@ function Safety.setForcedPosition(position, duration, priority, reason)
         priority = priority,
         reason = reason,
     }
+    Utils.recordEvent("Forced Position", tostring(reason or "Unknown") .. " -> " .. Utils.formatVector3(position))
 
     if not State.hideState.active and State.mode ~= "hopping" and State.mode ~= "regen" and State.mode ~= "looting" then
         Utils.setMode("dodging")
@@ -1562,6 +1696,7 @@ function Safety.startHop(reason)
     State.hideState.hopStarted = true
     Utils.setMode("hopping")
     Utils.log("Evacuating: " .. tostring(reason))
+    Utils.writeDebugSnapshot("startHop: " .. tostring(reason))
     Utils.notify("Evacuating: " .. tostring(reason), 5)
     Webhook.send("⚠️ Evacuating & Hopping", reason or "Unknown danger", 15158332)
     ServerHop.execute(true)
@@ -1601,6 +1736,7 @@ function Safety.enterHide(reason)
 
     Utils.setMode("hiding")
     Utils.log("Hiding: " .. tostring(reason))
+    Utils.recordEvent("Hide Enter", tostring(reason))
     Utils.notify("Hiding at Safe Spot...", 4)
     Safety.forceTeleport(State.hideState.spot)
 
@@ -1618,6 +1754,7 @@ function Safety.resumeAfterHide()
     State.running = false
     Safety.clearForcedPosition()
     Utils.setMode("idle")
+    Utils.recordEvent("Hide Resume", tostring(hideState.reason or "Unknown"))
 
     if hideState.wasLoop and BossFarm.Settings.BossLoopEnabled then
         State.bossLoopIndex = hideState.resumeIndex or 0
@@ -2949,6 +3086,7 @@ function Farm.farmBoss(hum, model, bossName)
     State.healthThreshold = pData.humanoid.MaxHealth * 0.5
     State.bossDeathDetected = false
     State.isLooting = false
+    Utils.recordEvent("Boss Start", bossName)
     
     -- Detect and equip weapon
     Weapons.updateBoost()
@@ -2991,6 +3129,7 @@ function Farm.farmBoss(hum, model, bossName)
         if bossDead then
             State.bossDeathDetected = true
             Positioning.beginBossDeathHold(config, 1.5)
+            Utils.recordEvent("Boss Dead", bossName)
 
             local holdDeadline = tick() + 1.5
             while State.running and not State.evacuating and tick() < holdDeadline do
