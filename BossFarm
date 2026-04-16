@@ -1313,17 +1313,19 @@ function Safety.getThreatReason()
     return false, nil
 end
 
-function Safety.isSenseOnlyHide(reason)
+function Safety.isSoftHideReason(reason)
     if type(reason) ~= "string" then
         return false
     end
 
-    if not string.find(reason, "Chakra Sense", 1, true) then
+    local isSense = string.find(reason, "Chakra Sense", 1, true) ~= nil
+    local isBossContested = string.find(reason, "Boss Contested", 1, true) ~= nil
+    if not isSense and not isBossContested then
         return false
     end
 
     local cache = State.threatCache
-    return not cache.nearby and not cache.currentBossContested
+    return not cache.nearby
 end
 
 function Safety.getAlternateHideSpot(currentSpot)
@@ -1655,7 +1657,7 @@ function Safety.startWorkers()
                 local horizontalDist = Vector3.new(currentPos.X - hideSpot.X, 0, currentPos.Z - hideSpot.Z).Magnitude
                 local recentDamage = State.lastIncomingDamageAt ~= 0 and tick() - State.lastIncomingDamageAt <= 1
                 local hardHoldActive = (State.hideState.hardHoldUntil or 0) > tick()
-                local softHide = Safety.isSenseOnlyHide(State.hideState.reason) and not recentDamage
+                local softHide = Safety.isSoftHideReason(State.hideState.reason) and not recentDamage
 
                 if hardHoldActive then
                     playerData.rootPart.CFrame = CFrame.new(hideSpot)
