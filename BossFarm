@@ -150,6 +150,8 @@ local BOSS_CONFIGS = {
         height = 14, positionAbove = true,
         triggerSpawn = true,
         triggerPos = Vector3.new(1418.9, -474.4, -595.8),
+        minionRadius = 100,
+        minionHeight = 5.5,
     },
 }
 
@@ -2369,6 +2371,93 @@ function Knocked.waitForBeingGripped(model, timeout)
     return false
 end
 
+function Knocked.findRingedSamuraiMinions(model)
+    local config = BOSS_CONFIGS["The Ringed Samurai"] or {}
+    local center = nil
+    local bossRoot = Utils.getBossRoot(model)
+    if bossRoot then
+        center = bossRoot.Position
+    else
+        center = config.triggerPos
+    end
+    if not center then return {} end
+
+    local radius = config.minionRadius or 100
+    local results = {}
+
+    local function scanContainer(container)
+        if not container then return end
+        for _, child in ipairs(container:GetChildren()) do
+            if child ~= model and child:IsA("Model") then
+                local lowerName = string.lower(child.Name)
+                if string.find(lowerName, "lavalight", 1, true) then
+                    local hum = child:FindFirstChildOfClass("Humanoid")
+                    local root = Utils.getBossRoot(child)
+                    if hum and hum.Health > 0 and root and (root.Position - center).Magnitude <= radius then
+                        table.insert(results, {
+                            model = child,
+                            humanoid = hum,
+                            root = root,
+                            distance = (root.Position - center).Magnitude,
+                        })
+                    end
+                end
+            end
+        end
+    end
+
+    scanContainer(workspace)
+    scanContainer(workspace:FindFirstChild("NPCs"))
+    scanContainer(workspace:FindFirstChild("Mobs"))
+    scanContainer(workspace:FindFirstChild("Enemies"))
+
+    table.sort(results, function(a, b)
+        return a.distance < b.distance
+    end)
+
+    return results
+end
+
+function Knocked.clearRingedSamuraiMinions(model, dataEvent)
+    local minions = Knocked.findRingedSamuraiMinions(model)
+    if #minions == 0 then
+        return false
+    end
+
+    Utils.recordEvent("Ringed Adds", "Found " .. tostring(#minions) .. " LavaLight")
+
+    local config = BOSS_CONFIGS["The Ringed Samurai"] or {}
+    local yOffset = config.minionHeight or 5.5
+
+    for _, minionData in ipairs(minions) do
+        if not State.running or State.currentBoss ~= "The Ringed Samurai" then
+            break
+        end
+
+        local minion = minionData.model
+        local hum = minionData.humanoid
+        local root = Utils.getBossRoot(minion)
+        if hum and hum.Health > 0 and root then
+            Utils.recordEvent("Ringed Add Clear", tostring(minion.Name))
+
+            local clearDeadline = tick() + 4
+            while State.running and hum.Parent and hum.Health > 0 and root.Parent and tick() < clearDeadline do
+                local pData = Utils.getPlayerData()
+                if not pData then break end
+
+                local holdPos = root.Position + Vector3.new(0, yOffset, 0)
+                pData.rootPart.CFrame = CFrame.lookAt(holdPos, root.Position)
+                pcall(function() dataEvent:FireServer("Dash", "Sub", root.Position) end)
+                task.wait(0.03)
+                pcall(function() dataEvent:FireServer("CheckMeleeHit", nil, "NormalAttack", false) end)
+                task.wait(0.08)
+            end
+        end
+    end
+
+    return true
+end
+
 function Knocked.retryGripUntilSuccess(model, maxAttempts)
     maxAttempts = maxAttempts or 12
     local bossRoot = Utils.getBossRoot(model)
@@ -2378,6 +2467,14 @@ function Knocked.retryGripUntilSuccess(model, maxAttempts)
     if not dataEvent then return false end
     
     for _ = 1, maxAttempts do
+        if State.currentBoss == "The Ringed Samurai" then
+            local clearedAdds = Knocked.clearRingedSamuraiMinions(model, dataEvent)
+            if clearedAdds then
+                bossRoot = Utils.getBossRoot(model)
+                if not bossRoot then return false end
+            end
+        end
+
         local pData = Utils.getPlayerData()
         if pData then
             pData.rootPart.CFrame = CFrame.new(bossRoot.Position)
