@@ -349,7 +349,7 @@ local function LoadConfig()
 end
 
 -- ============================================================================
--- AUTO LOGIN & FORCEFIELD LOGIC
+ -- AUTO LOGIN & FORCEFIELD LOGIC
 -- ============================================================================
 
 local currentMouseTask = nil
