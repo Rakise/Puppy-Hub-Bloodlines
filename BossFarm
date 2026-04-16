@@ -186,7 +186,7 @@ local WOODEN_GOLEM_DODGE_SPOTS = {
     Vector3.new(-4727.5517578125, 336.9197692871094, -3005.190673828125),
 }
 local WOODEN_GOLEM_DODGE_DURATION = 6.7
-local WOODEN_GOLEM_TWEEN_DURATION = 0.2
+local WOODEN_GOLEM_TWEEN_DURATION = 0.01
 -- ============================================
 -- CHARGE ANIMATION
 -- ============================================
@@ -256,6 +256,8 @@ local State = {
     lifeForceBaseline = nil,
     forcedPosition = nil,
     combatStabilizeUntil = 0,
+    bossDeathAttackUntil = 0,
+    bossDeathHoldCFrame = nil,
     skippedBossUntil = {},
     hideState = {
         active = false,
@@ -2608,15 +2610,22 @@ function Combat.startAttacking(model)
                 continue
             end
             
-            if dataEvent and model and model.Parent then
+            local attackPosition = nil
+            if model and model.Parent then
                 local bossRoot = Utils.getBossRoot(model)
                 if bossRoot then
-                    -- Dash toward boss first for extra damage
-                    pcall(function() dataEvent:FireServer("Dash", "Sub", bossRoot.Position) end)
-                    task.wait(0.05)
-                    -- Then melee hit
-                    pcall(function() dataEvent:FireServer("CheckMeleeHit", nil, "NormalAttack", false) end)
+                    attackPosition = bossRoot.Position
+                    State.lastBossPosition = attackPosition
                 end
+            end
+            if not attackPosition and tick() < (State.bossDeathAttackUntil or 0) then
+                attackPosition = State.lastBossPosition
+            end
+
+            if dataEvent and attackPosition then
+                pcall(function() dataEvent:FireServer("Dash", "Sub", attackPosition) end)
+                task.wait(0.05)
+                pcall(function() dataEvent:FireServer("CheckMeleeHit", nil, "NormalAttack", false) end)
             end
             
             task.wait(BossFarm.Settings.AttackInterval)
@@ -2687,6 +2696,55 @@ function Positioning.primeCombatOffsets(model, config)
     end
 end
 
+function Positioning.beginBossDeathHold(config, holdDuration)
+    local desiredUntil = tick() + (holdDuration or 1.5)
+    if desiredUntil > (State.bossDeathAttackUntil or 0) then
+        State.bossDeathAttackUntil = desiredUntil
+    end
+
+    local forced = Safety.getForcedPosition()
+    if forced then
+        State.bossDeathHoldCFrame = CFrame.new(forced.position)
+        return
+    end
+
+    if State.hyugaArenaUnsafe then
+        State.bossDeathHoldCFrame = CFrame.new(HYUGA_ARENA_ESCAPE_SPOT)
+        return
+    end
+
+    if State.hakuSafeSpot then
+        State.bossDeathHoldCFrame = CFrame.new(HAKU_SAFE_SPOT)
+        return
+    end
+
+    local playerData = Utils.getPlayerData()
+    if playerData and playerData.rootPart then
+        State.bossDeathHoldCFrame = playerData.rootPart.CFrame
+        return
+    end
+
+    if State.lastBossPosition then
+        local fallbackHeight = math.max((config and config.height or 15) + 8, 20)
+        State.bossDeathHoldCFrame = CFrame.new(State.lastBossPosition + Vector3.new(0, fallbackHeight, 0))
+    end
+end
+
+function Positioning.applyBossDeathHold(playerRoot)
+    if not playerRoot then return false end
+    if tick() >= (State.bossDeathAttackUntil or 0) then
+        return false
+    end
+
+    local holdCFrame = State.bossDeathHoldCFrame
+    if not holdCFrame then
+        return false
+    end
+
+    playerRoot.CFrame = holdCFrame
+    return true
+end
+
 function Positioning.startAnchoring(model, config)
     State.anchorConn = RunService.Heartbeat:Connect(function()
         pcall(function()
@@ -2695,14 +2753,19 @@ function Positioning.startAnchoring(model, config)
             if not State.running then return end
             if State.deathCheckInProgress then return end
             if State.mode == "hiding" or State.mode == "hopping" then return end
-            
-            -- If we're currently looting, don't reposition
+
+            local pData = Utils.getPlayerData()
+            if not pData then return end
+            if Positioning.applyBossDeathHold(pData.rootPart) then return end
+
             if State.isLooting then return end
             
             local hum = model:FindFirstChildOfClass("Humanoid")
             if not hum or not hum.Parent or hum.Health <= 0 then
                 -- Don't call Farm.stopCurrent() here — just flag and let farmBoss handle it
                 State.bossDeathDetected = true
+                Positioning.beginBossDeathHold(config, 1.5)
+                Positioning.applyBossDeathHold(pData.rootPart)
                 return
             end
             
@@ -2710,9 +2773,6 @@ function Positioning.startAnchoring(model, config)
             if not bossRoot then return end
             State.lastBossPosition = bossRoot.Position
             
-            local pData = Utils.getPlayerData()
-            if not pData then return end
-
             -- Position logic
             if State.hyugaArenaUnsafe then
                 Safety.forceTeleport(HYUGA_ARENA_ESCAPE_SPOT)
@@ -2911,15 +2971,26 @@ function Farm.farmBoss(hum, model, bossName)
             or not model or not model.Parent
         
         if bossDead then
-            -- Anti-Kamui: immediately anchor above the last known boss position
-            -- This prevents falling into the void when the boss model disappears
-            if State.lastBossPosition then
+            State.bossDeathDetected = true
+            Positioning.beginBossDeathHold(config, 1.5)
+
+            local holdDeadline = tick() + 1.5
+            while State.running and not State.evacuating and tick() < holdDeadline do
+                task.wait()
+            end
+            local preLootSpot = config.lootSpot or State.lastBossPosition
+            local shouldAutoLootNow = preLootSpot and (BossFarm.Settings.AutoLootOnKill or BossFarm.Settings.BossLoopEnabled)
+            if shouldAutoLootNow then
+                State.isLooting = true
+                Utils.setMode("looting")
+                Utils.log("Boss died, teleporting to loot spot for " .. bossName)
+
                 local pd = Utils.getPlayerData()
                 if pd then
-                    Utils.safeTeleport(CFrame.new(State.lastBossPosition + Vector3.new(0, 10, 0)))
+                    Utils.safeTeleport(CFrame.new(preLootSpot + Vector3.new(0, 15, 0)))
                 end
             end
-            
+
             -- Stop combat systems
             Farm.stopCurrent()
             Webhook.send("💀 Boss Killed", "**" .. bossName .. "** has been defeated!", 3066993)
@@ -3040,6 +3111,8 @@ function Farm.stopCurrent()
     State.hakuSafeSpot = false
     State.weaponHeightBoost = 0
     State.combatStabilizeUntil = 0
+    State.bossDeathAttackUntil = 0
+    State.bossDeathHoldCFrame = nil
     State.inDanger = false
     State.bossDeathDetected = false
     Safety.clearForcedPosition()
