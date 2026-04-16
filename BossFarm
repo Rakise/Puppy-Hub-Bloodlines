@@ -292,6 +292,7 @@ local State = {
         resumeSingle = false,
         resumeIndex = 0,
         hopStarted = false,
+        keepHoldingDuringHop = false,
     },
     threatCache = {
         nearby = false,
@@ -1027,6 +1028,7 @@ local function newHideState()
         resumeSingle = false,
         resumeIndex = 0,
         hopStarted = false,
+        keepHoldingDuringHop = false,
         lastSwapAt = 0,
     }
 end
@@ -1605,6 +1607,17 @@ function Safety.scheduleDeathCheck(reason)
     end)
 end
 
+local function getHideResumeClearTime(reason)
+    local clearTime = HIDE_RESUME_CLEAR_TIME
+    if type(reason) == "string" and string.find(reason, "Chakra Sense", 1, true) then
+        clearTime = 2.5
+    end
+    if State.lastIncomingDamageAt ~= 0 and tick() - State.lastIncomingDamageAt <= 2 then
+        clearTime = math.max(clearTime, 2.5)
+    end
+    return clearTime
+end
+
 function Safety.handleIncomingDamage(newHealth)
     local previousHealth = State.lastKnownHealth or newHealth or 0
     State.lastKnownHealth = newHealth or previousHealth
@@ -1696,6 +1709,7 @@ function Safety.startHop(reason)
 
     State.serverHopInProgress = true
     State.hideState.hopStarted = true
+    State.hideState.keepHoldingDuringHop = not (type(reason) == "string" and string.find(reason, "Loop complete", 1, true) ~= nil)
     Utils.setMode("hopping")
     Utils.log("Evacuating: " .. tostring(reason))
     Utils.writeDebugSnapshot("startHop: " .. tostring(reason))
@@ -1734,6 +1748,7 @@ function Safety.enterHide(reason)
         resumeSingle = resumeSingle,
         resumeIndex = resumeIndex,
         hopStarted = false,
+        keepHoldingDuringHop = false,
     }
 
     Utils.setMode("hiding")
@@ -1818,7 +1833,7 @@ function Safety.startWorkers()
                 hideSpot = State.hideState.spot
             end
 
-            if playerData and hideSpot and not State.hideState.hopStarted then
+            if playerData and hideSpot and (not State.hideState.hopStarted or State.hideState.keepHoldingDuringHop) then
                 local currentPos = playerData.rootPart.Position
                 local horizontalDist = Vector3.new(currentPos.X - hideSpot.X, 0, currentPos.Z - hideSpot.Z).Magnitude
                 local recentDamage = State.lastIncomingDamageAt ~= 0 and tick() - State.lastIncomingDamageAt <= 1
@@ -1856,7 +1871,7 @@ function Safety.startWorkers()
                     Safety.startHop(State.hideState.reason or threatReason)
                 elseif hasThreat and tick() >= State.hideState.hopDeadline then
                     Safety.startHop("Danger > " .. tostring(BossFarm.Settings.HideThreatTimeout or 30) .. "s (" .. tostring(threatReason or State.hideState.reason or "Unknown") .. ")")
-                elseif not hasThreat and tick() - State.hideState.lastDangerAt >= HIDE_RESUME_CLEAR_TIME then
+                elseif not hasThreat and tick() - State.hideState.lastDangerAt >= getHideResumeClearTime(State.hideState.reason) then
                     Safety.resumeAfterHide()
                 end
             end
