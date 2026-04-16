@@ -75,6 +75,8 @@ local BRAZIL_HUB_BASE_URL = "https://raw.githubusercontent.com/Rakise/Puppy-Hub-
 local REPO_BASE_URL = 'https://raw.githubusercontent.com/violin-suzutsuki/LinoriaLib/refs/heads/main/'
 local CONFIG_FILE = "PuppyHub_Bloodlines_Config.json"
 local HOP_MARKER_FILE = "PuppyHub_HopMarker.txt"
+local BLOODLINES_MAIN_PLACE_ID = 10266164381
+local BLOODLINES_REDIRECT_PLACE_ID = 9468587524
 
 -- Load Library (stagger to prevent freeze)
 print("[PuppyHub] Loading UI Library...")
@@ -280,7 +282,7 @@ local Config = {
     BossServerHopIfChakraSense = false,
     BossHideThenHopOnThreat = false,
     BossHopAfterLoop = false,
-    BossAutoLootOnKill = false,
+    BossAutoLootOnKill = true,
     BossAutoSellTrinkets = false,
     BossAutoSellGems = false,
     BossWebhookURL = "",
@@ -745,11 +747,20 @@ end
 
 -- Auto-login ONLY on actual server hop (marker file written by hop systems)
 -- This prevents forcefield tween + continue button on fresh manual joins
+local currentPlaceId = game.PlaceId
+local isRedirectHoldingPlace = currentPlaceId == BLOODLINES_REDIRECT_PLACE_ID
+local isMainBloodlinesPlace = currentPlaceId == BLOODLINES_MAIN_PLACE_ID
 local isActualHop = false
 if isfile and isfile(HOP_MARKER_FILE) then
     isActualHop = true
-    pcall(function() delfile(HOP_MARKER_FILE) end)  -- Delete marker after reading
+    if isMainBloodlinesPlace then
+        pcall(function() delfile(HOP_MARKER_FILE) end)  -- Consume marker only in Bloodlines Mains
+    end
     print("[PuppyHub] ✅ Hop marker detected — this is a server hop redirect.")
+end
+
+if isActualHop and isRedirectHoldingPlace then
+    print("[PuppyHub] Redirect place detected. Preserving hop marker until Bloodlines Mains.")
 end
 
 local isFarmRedirect = isActualHop and (Config.AutoSummon or Config.BossFarmEnabled or Config.BossLoopEnabled)
@@ -776,8 +787,10 @@ if not isFarmRedirect then
     end
 end
 
-if isFarmRedirect then
+if isFarmRedirect and isMainBloodlinesPlace then
     task.spawn(AutoLoginRoutine)
+elseif isFarmRedirect and isRedirectHoldingPlace then
+    print("[PuppyHub] Waiting in redirect place for Bloodlines Mains. Auto-login deferred.")
 end
 
 -- ============================================================================

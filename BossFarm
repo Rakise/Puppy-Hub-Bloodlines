@@ -1328,6 +1328,14 @@ function Safety.isSoftHideReason(reason)
     return not cache.nearby
 end
 
+function Safety.shouldImmediateHopHide(reason)
+    if type(reason) ~= "string" then
+        return false
+    end
+
+    return string.find(reason, "Player Nearby", 1, true) ~= nil
+end
+
 function Safety.getAlternateHideSpot(currentSpot)
     if currentSpot and (currentSpot - SECRET_SPOT).Magnitude <= 1 then
         return SECRET_SPOT_BACKUP
@@ -1683,7 +1691,10 @@ function Safety.startWorkers()
             end
 
             if not State.hideState.hopStarted then
-                if BossFarm.Settings.HideThenHopOnThreat then
+                local activeReason = threatReason or State.hideState.reason
+                if Safety.shouldImmediateHopHide(activeReason) then
+                    Safety.startHop(activeReason)
+                elseif BossFarm.Settings.HideThenHopOnThreat then
                     Safety.startHop(State.hideState.reason or threatReason)
                 elseif hasThreat and tick() >= State.hideState.hopDeadline then
                     Safety.startHop("Danger > " .. tostring(BossFarm.Settings.HideThreatTimeout or 30) .. "s (" .. tostring(threatReason or State.hideState.reason or "Unknown") .. ")")
@@ -2509,13 +2520,13 @@ function Loot.collectNearBoss(bossName, config)
     end)
     
     local startTime = tick()
-    local maxWait = 30 -- Max seconds to wait for loot
+    local maxWait = 35 -- Max seconds to wait for loot
     local noNewItemTimer = 0
-    local MIN_LOOT_WAIT = 10 -- Minimum seconds before allowing no-new-items exit
+    local MIN_LOOT_WAIT = 15 -- Minimum seconds before allowing no-new-items exit
     
     -- Grace period: wait for fresh loot to spawn before scanning
     -- This prevents stale loot from previous kills triggering a premature exit
-    for g = 1, 3 do
+    for g = 1, 5 do
         pData = Utils.getPlayerData()
         if pData then
             Utils.safeTeleport(CFrame.new(lootSpot + Vector3.new(0, 15, 0)))
@@ -2872,7 +2883,8 @@ function Farm.farmBoss(hum, model, bossName)
             Webhook.send("💀 Boss Killed", "**" .. bossName .. "** has been defeated!", 3066993)
             
             -- Loot collection: set flag to prevent anchor from repositioning us
-            if BossFarm.Settings.AutoLootOnKill and (config.lootSpot or State.lastBossPosition) then
+            local shouldAutoLoot = (config.lootSpot or State.lastBossPosition) and (BossFarm.Settings.AutoLootOnKill or BossFarm.Settings.BossLoopEnabled)
+            if shouldAutoLoot then
                 State.isLooting = true
                 Utils.setMode("looting")
                 Utils.log("Boss died, teleporting to loot spot for " .. bossName)
