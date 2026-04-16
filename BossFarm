@@ -16,6 +16,7 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 
 local GAME_ID = 10266164381
+local HOP_MARKER_FILE = "PuppyHub_HopMarker.txt"
 
 -- Cached remote references
 local function GetDataEvent()
@@ -26,6 +27,24 @@ end
 local function GetDataFunction()
     local events = ReplicatedStorage:FindFirstChild("Events")
     return events and events:FindFirstChild("DataFunction")
+end
+
+local function writeHopMarker(context)
+    if not writefile then return false end
+
+    local payload = tostring(tick()) .. "|" .. tostring(game.PlaceId) .. "|" .. tostring(game.JobId) .. "|" .. tostring(context or "unknown")
+    for _ = 1, 3 do
+        local ok = pcall(function()
+            writefile(HOP_MARKER_FILE, payload)
+        end)
+        if ok and isfile and isfile(HOP_MARKER_FILE) then
+            return true
+        end
+        task.wait(0.05)
+    end
+
+    warn("[BossFarm] Failed to verify hop marker write for " .. tostring(context))
+    return false
 end
 
 -- ============================================
@@ -2803,8 +2822,7 @@ function ServerHop.join(serverId)
     local dataEvent = GetDataEvent()
     if dataEvent then
         Utils.log("Firing ServerTeleport to: " .. tostring(serverId))
-        -- Write hop marker so CoreManager knows this is a redirect on next join
-        pcall(function() writefile("PuppyHub_HopMarker.txt", tostring(tick())) end)
+        writeHopMarker("BossFarm.ServerHop.join")
         dataEvent:FireServer("ServerTeleport", serverId, 14)
     else
         Utils.log("Error: DataEvent not found!", "warn")
