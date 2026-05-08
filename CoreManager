@@ -825,6 +825,34 @@ local function waitForAutoLoginContinue(menuScreen, timeoutSeconds)
     return nil
 end
 
+local function stopAutoLoginMenuAnimations(humanoid)
+    if not humanoid then return end
+    local animator = humanoid:FindFirstChildOfClass("Animator")
+    if not animator then return end
+
+    for _, track in ipairs(animator:GetPlayingAnimationTracks()) do
+        if track.Priority == Enum.AnimationPriority.Action3 then
+            pcall(function()
+                track:Stop(0.1)
+            end)
+        end
+    end
+end
+
+local function cleanupAutoLoginMenuScene()
+    for _, inst in ipairs(workspace:GetChildren()) do
+        if inst:IsA("Model") then
+            local hasPlayerBlock = inst:FindFirstChild("PlayerBlock1", true) ~= nil
+            local hasMainCam = inst:FindFirstChild("MainCam1", true) ~= nil
+            if hasPlayerBlock and hasMainCam then
+                pcall(function()
+                    inst:Destroy()
+                end)
+            end
+        end
+    end
+end
+
 local function tweenForcefieldCFrameSync(root, targetCFrame, duration)
     local startTime = tick()
     local startCFrame = root.CFrame
@@ -890,6 +918,9 @@ local function AutoLoginRoutine()
     print("[PuppyHub] Starting Auto-Login Routine...")
     local clientGui = PlayerGui:WaitForChild("ClientGui", 30)
     if not clientGui then return end
+    local char = LocalPlayer.Character
+    local humanoid = char and char:FindFirstChildOfClass("Humanoid")
+    local forceFieldVisual = char and char:FindFirstChild("ForceField")
     
     local menuScreen = clientGui:WaitForChild("MenuScreen", 10)
     if menuScreen then
@@ -931,11 +962,16 @@ local function AutoLoginRoutine()
             loadResult = DataFunction:InvokeServer("LoadedIn")
         end)
         print("[PuppyHub] LoadedIn result:", tostring(loadResult))
+
+        stopAutoLoginMenuAnimations(humanoid)
         
+        task.wait(1)
+
         -- Step 3: Stop menu music (find and stop any playing sounds in menu)
         pcall(function()
             for _, desc in ipairs(menuScreen:GetDescendants()) do
                 if desc:IsA("Sound") and desc.IsPlaying then
+                    desc.Volume = 0
                     desc:Stop()
                 end
             end
@@ -952,22 +988,37 @@ local function AutoLoginRoutine()
             end
         end)
         
-        task.wait(0.5)
+        pcall(function()
+            local menuServerList = menuScreen:FindFirstChild("ServerList")
+            if menuServerList then
+                menuServerList:Destroy()
+            end
+        end)
+
+        task.wait(0.25)
         
         -- Step 5: Hide the menu screen entirely
         pcall(function()
             menuScreen.Visible = false
+        end)
+
+        cleanupAutoLoginMenuScene()
+
+        pcall(function()
+            if forceFieldVisual and forceFieldVisual:IsDescendantOf(char) and forceFieldVisual.Visible ~= nil then
+                forceFieldVisual.Visible = true
+            end
         end)
         
         -- Step 6: Reset camera to gameplay mode
         pcall(function()
             local cam = Workspace.CurrentCamera
             cam.CameraType = Enum.CameraType.Custom
-            local char = LocalPlayer.Character
+            char = LocalPlayer.Character
             if char then
-                local hum = char:FindFirstChildOfClass("Humanoid")
-                if hum then
-                    cam.CameraSubject = hum
+                humanoid = char:FindFirstChildOfClass("Humanoid")
+                if humanoid then
+                    cam.CameraSubject = humanoid
                 end
             end
         end)
