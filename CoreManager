@@ -773,6 +773,7 @@ local function waitForAutoLoginContinue(menuScreen, timeoutSeconds)
     local readySince = nil
     local sawLoadingActive = false
     local sawMenuOffscreen = false
+    local sawNewGameFirst = false
 
     if not menu or not continueButton then
         warn("[PuppyHub] Auto-login could not find the menu continue gate.")
@@ -800,6 +801,10 @@ local function waitForAutoLoginContinue(menuScreen, timeoutSeconds)
             sawMenuOffscreen = true
         end
 
+        if loadingDone and menuReady and newGameButton and newGameButton.Visible and not continueButton.Visible then
+            sawNewGameFirst = true
+        end
+
         if loadingDone and menuReady and continueButton.Visible then
             if not readySince then
                 readySince = tick()
@@ -813,14 +818,12 @@ local function waitForAutoLoginContinue(menuScreen, timeoutSeconds)
             readySince = nil
         end
 
-        if loadingDone and menuReady and newGameButton and newGameButton.Visible then
-            warn("[PuppyHub] Auto-login reached menu but only NewGame is visible.")
-            return nil
-        end
-
         task.wait(0.1)
     end
 
+    if sawNewGameFirst then
+        warn("[PuppyHub] Timed out waiting for Continue button after NewGame appeared first.")
+    end
     warn("[PuppyHub] Timed out waiting for Continue button during auto-login.")
     return nil
 end
