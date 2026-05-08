@@ -1,11 +1,11 @@
 -- ============================================================================
--- Puppy Hub | Bloodlines Loader
--- Waits for game to fully load before executing to prevent crashes
+-- Puppy Hub | Bloodlines Loader (Fixed)
 -- ============================================================================
 
 local ScriptURL = "https://ghproxy.net/https://raw.githubusercontent.com/Rakise/Puppy-Hub-Bloodlines/refs/heads/main/CoreManager"
+local LoaderURL = "https://ghproxy.net/https://raw.githubusercontent.com/Rakise/Puppy-Hub-Bloodlines/refs/heads/main/Loader"
 
--- Show loading notification
+-- Show loading notification safely
 pcall(function()
     game:GetService("StarterGui"):SetCore("SendNotification", {
         Title = "Puppy Hub 🐾",
@@ -14,41 +14,44 @@ pcall(function()
     })
 end)
 
--- Wait for critical game systems before loading
 local function waitForGame()
-    -- 1. Wait for the game to finish loading
+    -- 1. Wait for game to load entirely
     if not game:IsLoaded() then
         game.Loaded:Wait()
     end
     
-    -- 2. Wait for our character to exist
-    local player = game:GetService("Players").LocalPlayer
-    if not player then return false end
+    local Players = game:GetService("Players")
     
-    if not player.Character then
-        player.CharacterAdded:Wait()
+    -- 2. Safely wait for LocalPlayer (Crucial for auto-execute)
+    while not Players.LocalPlayer do
+        task.wait(0.1)
     end
+    local player = Players.LocalPlayer
     
-    -- 3. Wait for PlayerGui (needed by UI library and modules)
+    -- 3. Fix the Character race condition
+    local character = player.Character or player.CharacterAdded:Wait()
+    
+    -- 4. Wait for PlayerGui
     player:WaitForChild("PlayerGui", 30)
     
-    -- 4. Wait for ReplicatedStorage events (needed by farm systems)
+    -- 5. Wait for ReplicatedStorage events
     local RS = game:GetService("ReplicatedStorage")
-    RS:WaitForChild("Events", 30)
+    local events = RS:WaitForChild("Events", 30)
     
-    -- 5. Small breather to let Roblox finish initial rendering
+    if not events then
+        warn("[PuppyHub] ReplicatedStorage.Events took too long to load!")
+        -- We don't return false here just in case the game doesn't actually need it right away
+    end
+    
+    -- 6. Breather for rendering
     task.wait(2)
-    
     return true
 end
 
 -- Main execution
 task.spawn(function()
     local ready = waitForGame()
-    if not ready then
-        warn("[PuppyHub] Game failed to load properly. Aborting.")
-        return
-    end
+    if not ready then return end
     
     -- Load the hub
     local success, err = pcall(function()
@@ -70,6 +73,7 @@ task.spawn(function()
     print("[PuppyHub] ✅ Loaded successfully!")
 end)
 
+-- Queue on Teleport (Also fixed for race conditions)
 local queueFunction = queue_on_teleport or queueonteleport
 if queueFunction then
     local teleportScript = [[
@@ -78,12 +82,14 @@ if queueFunction then
                 game.Loaded:Wait()
             end
             
-            local player = game:GetService("Players").LocalPlayer
-            if not player then return end
-            if not player.Character then player.CharacterAdded:Wait() end
+            local Players = game:GetService("Players")
+            while not Players.LocalPlayer do task.wait(0.1) end
+            local player = Players.LocalPlayer
+            
+            local character = player.Character or player.CharacterAdded:Wait()
             
             pcall(function()
-                loadstring(game:HttpGet("]] .. ScriptURL .. [["))()
+                loadstring(game:HttpGet("]] .. LoaderURL .. [["))()
             end)
         end)
     ]]
