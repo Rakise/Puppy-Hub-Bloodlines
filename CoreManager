@@ -241,6 +241,95 @@ LocalPlayer.CharacterAdded:Connect(function(char)
     injectVoidImmunity(char)
 end)
 
+-- ============================================================================
+-- VOID BARRIER SYSTEM
+-- Places invisible collision parts above Void/Lava tagged parts near the player
+-- Uses CollectionService:GetTagged() for O(1) lookups instead of GetDescendants
+-- ============================================================================
+local CollectionService = game:GetService("CollectionService")
+local VOID_BARRIER_RADIUS = 120 -- studs — how far to look for void parts
+local VOID_BARRIER_THICKNESS = 3 -- studs thick
+local VOID_BARRIER_OFFSET = 2   -- studs above the void part surface
+
+local voidBarriers = {} -- [voidPart] = barrierPart
+local voidBarrierConn = nil
+
+local function createBarrierFor(voidPart)
+    if voidBarriers[voidPart] then return end
+    if not voidPart:IsA("BasePart") then return end
+    
+    local barrier = Instance.new("Part")
+    barrier.Name = "_PuppyVoidBarrier"
+    barrier.Anchored = true
+    barrier.CanCollide = true
+    barrier.Transparency = 1
+    barrier.Size = Vector3.new(voidPart.Size.X + 2, VOID_BARRIER_THICKNESS, voidPart.Size.Z + 2)
+    barrier.CFrame = voidPart.CFrame * CFrame.new(0, (voidPart.Size.Y / 2) + VOID_BARRIER_OFFSET, 0)
+    barrier.Parent = workspace
+    
+    voidBarriers[voidPart] = barrier
+end
+
+local function removeBarrierFor(voidPart)
+    local barrier = voidBarriers[voidPart]
+    if barrier then
+        barrier:Destroy()
+        voidBarriers[voidPart] = nil
+    end
+end
+
+local function cleanupAllBarriers()
+    for part, barrier in pairs(voidBarriers) do
+        if barrier then barrier:Destroy() end
+    end
+    voidBarriers = {}
+end
+
+local function startVoidBarrierLoop()
+    if voidBarrierConn then return end
+    
+    voidBarrierConn = RunService.Heartbeat:Connect(function()
+        local char = LocalPlayer.Character
+        local root = char and char:FindFirstChild("HumanoidRootPart")
+        if not root then return end
+        
+        local playerPos = root.Position
+        
+        -- Get all Void-tagged parts (CollectionService caches this internally)
+        local voidParts = CollectionService:GetTagged("Void")
+        
+        -- Also check Lava-named parts that could kill
+        local activeSet = {}
+        
+        for _, voidPart in ipairs(voidParts) do
+            if voidPart:IsA("BasePart") and voidPart:IsDescendantOf(workspace) then
+                local dist = (voidPart.Position - playerPos).Magnitude
+                if dist < VOID_BARRIER_RADIUS then
+                    activeSet[voidPart] = true
+                    createBarrierFor(voidPart)
+                end
+            end
+        end
+        
+        -- Clean up barriers for parts that are now out of range or destroyed
+        for voidPart, barrier in pairs(voidBarriers) do
+            if not activeSet[voidPart] or not voidPart.Parent then
+                removeBarrierFor(voidPart)
+            end
+        end
+    end)
+    print("[PuppyHub] 🛡️ Void Barrier system started.")
+end
+
+local function stopVoidBarrierLoop()
+    if voidBarrierConn then
+        voidBarrierConn:Disconnect()
+        voidBarrierConn = nil
+    end
+    cleanupAllBarriers()
+    print("[PuppyHub] Void Barrier system stopped.")
+end
+
 local CoreConnections = {} -- Holds explicit RunService connections
 
 -- ============================================================================
