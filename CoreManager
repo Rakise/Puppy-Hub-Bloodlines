@@ -11,10 +11,10 @@ local GuiService = game:GetService("GuiService")
 
 local VirtualInputManager = (function()
     local ok, vim = pcall(function() return Instance.new("VirtualInputManager") end)
-    if ok then print("[PuppyHub] ✅ Using instanced VirtualInputManager") return vim end
+    if ok then print("[PuppyHub] Using instanced VirtualInputManager") return vim end
     local ok2, vim2 = pcall(function() return game:GetService("VirtualInputManager") end)
-    if ok2 then print("[PuppyHub] ✅ Using service VirtualInputManager") return vim2 end
-    warn("[PuppyHub] ⚠️ VirtualInputManager unavailable!")
+    if ok2 then print("[PuppyHub] Using service VirtualInputManager") return vim2 end
+    warn("[PuppyHub] VirtualInputManager unavailable!")
     return nil
 end)()
 
@@ -37,7 +37,7 @@ oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
         local action = args[1]
         -- Always block anticheat punishment remotes
         if action == "BanMe" or action == "KickMe" or action == "FlagMe" then
-            warn("[PuppyHub] 🛡️ Anticheat Blocked:", action, args[2])
+            warn("[PuppyHub] Anticheat blocked:", action, args[2])
             return
         end
         -- Block void/lava damage remotes when Prevent Void is enabled
@@ -47,7 +47,7 @@ oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
     end
     return oldNamecall(self, ...)
 end))
-print("[PuppyHub] ✅ Anticheat Interceptor injected.")
+print("[PuppyHub] Anticheat interceptor injected.")
 
 -- ============================================================================
 -- COMBAT TAG CHECK (for pre-hop safety)
@@ -247,7 +247,7 @@ end)
 -- Uses CollectionService:GetTagged() for O(1) lookups instead of GetDescendants
 -- ============================================================================
 local CollectionService = game:GetService("CollectionService")
-local VOID_BARRIER_RADIUS = 120 -- studs — how far to look for void parts
+local VOID_BARRIER_RADIUS = 120 -- studs - how far to look for void parts
 local VOID_BARRIER_THICKNESS = 3 -- studs thick
 local VOID_BARRIER_OFFSET = 2   -- studs above the void part surface
 
@@ -318,7 +318,7 @@ local function startVoidBarrierLoop()
             end
         end
     end)
-    print("[PuppyHub] 🛡️ Void Barrier system started.")
+    print("[PuppyHub] Void barrier system started.")
 end
 
 local function stopVoidBarrierLoop()
@@ -328,6 +328,37 @@ local function stopVoidBarrierLoop()
     end
     cleanupAllBarriers()
     print("[PuppyHub] Void Barrier system stopped.")
+end
+
+local function setBossSafetyProtectionsEnabled(enabled)
+    State.NegateFallEnabled = enabled
+    State.PreventVoidEnabled = enabled
+    _preventVoidCheck = enabled
+
+    local character = LocalPlayer.Character
+    if enabled then
+        if character then
+            injectFallImmunity(character)
+            injectVoidImmunity(character)
+        end
+        startVoidBarrierLoop()
+    else
+        if character then
+            local tag = character:FindFirstChild("NegateFall")
+            if tag then tag:Destroy() end
+            character:SetAttribute("VoidResistance", nil)
+        end
+        stopVoidBarrierLoop()
+    end
+
+    if Toggles then
+        if Toggles.FallDamageToggle and Toggles.FallDamageToggle.Value ~= enabled then
+            Toggles.FallDamageToggle:SetValue(enabled)
+        end
+        if Toggles.PreventVoidToggle and Toggles.PreventVoidToggle.Value ~= enabled then
+            Toggles.PreventVoidToggle:SetValue(enabled)
+        end
+    end
 end
 
 local CoreConnections = {} -- Holds explicit RunService connections
@@ -443,7 +474,7 @@ local function StartMovementLoops()
         if dir.Magnitude > 0 then
             local speed = hum.WalkSpeed
 
-            -- direção final para onde o HRP deve ir
+            -- final direction for where the HRP should move
             local targetCF = root.CFrame + (dir * speed * 0.1)
 
             if tween then tween:Cancel() end
@@ -452,7 +483,7 @@ local function StartMovementLoops()
             })
             tween:Play()
         else
-            -- parado → cancela tudo
+            -- stopped - cancel everything
             if tween then tween:Cancel() end
         end
     else
@@ -712,32 +743,6 @@ local function waitForSafety(root, instantHop)
     local unsafeStart = tick()
     while true do
         local unsafe, reason = isChakraSenseDuringForcefield()
-        if not unsafe then return true end -- Safe again, continue
-        
-        -- If instantHop is true, hop IMMEDIATELY without waiting 15 seconds
-        if instantHop and Config.ServerHopOnDanger and AutoFarmHandler.executeServerHop then
-            print("[PuppyHub] ⚠️ Danger detected before starting: " .. tostring(reason) .. ". Hopping INSTANTLY...")
-            root.CFrame = CFrame.new(-3933, 1120, -4571)
-            AutoFarmHandler.executeServerHop()
-            return false
-        end
-        
-        -- If unsafe for >15s during tween, hop
-        if tick() - unsafeStart > 15 and Config.ServerHopOnDanger and AutoFarmHandler.executeServerHop then
-            print("[PuppyHub] ⚠️ Danger persisted 15s during forcefield: " .. tostring(reason) .. ". Hopping...")
-            root.CFrame = CFrame.new(-3933, 1120, -4571)
-            AutoFarmHandler.executeServerHop()
-            return false
-        end
-        
-        task.wait(0.5)
-    end
-end
-
-waitForSafety = function(root, instantHop)
-    local unsafeStart = tick()
-    while true do
-        local unsafe, reason = isChakraSenseDuringForcefield()
         if not unsafe then return true end
 
         if instantHop then
@@ -755,6 +760,40 @@ waitForSafety = function(root, instantHop)
     end
 end
 
+local function waitForAutoLoginContinue(menuScreen, timeoutSeconds)
+    local deadline = tick() + (timeoutSeconds or 30)
+    local menu = menuScreen and menuScreen:FindFirstChild("Menu")
+    local continueButton = menu and menu:FindFirstChild("Continue")
+    local newGameButton = menu and menu:FindFirstChild("NewGame")
+
+    if not menu or not continueButton then
+        warn("[PuppyHub] Auto-login could not find the menu continue gate.")
+        return nil
+    end
+
+    while tick() < deadline do
+        local loadingScreen = menuScreen:FindFirstChild("LoadingScreen")
+        local loadingDone = not loadingScreen
+            or not loadingScreen.Visible
+            or loadingScreen.BackgroundTransparency >= 0.9
+        local menuReady = menu.Visible and menu.AbsoluteSize.X > 0 and menu.AbsoluteSize.Y > 0
+
+        if loadingDone and menuReady and continueButton.Visible then
+            return "Continue"
+        end
+
+        if loadingDone and newGameButton and newGameButton.Visible then
+            warn("[PuppyHub] Auto-login reached menu but only NewGame is visible.")
+            return nil
+        end
+
+        task.wait(0.1)
+    end
+
+    warn("[PuppyHub] Timed out waiting for Continue button during auto-login.")
+    return nil
+end
+
 local function tweenForcefieldCFrameSync(root, targetCFrame, duration)
     local startTime = tick()
     local startCFrame = root.CFrame
@@ -762,12 +801,12 @@ local function tweenForcefieldCFrameSync(root, targetCFrame, duration)
         -- Check for danger during tween
         local unsafe, reason = isChakraSenseDuringForcefield()
         if unsafe then
-            -- PAUSE the tween — don't tween back, just freeze and wait
-            print("[PuppyHub] ⏸️ Danger during tween: " .. tostring(reason) .. ". Pausing...")
+            -- Pause the tween: do not tween back, just freeze and wait
+            print("[PuppyHub] Danger during tween: " .. tostring(reason) .. ". Pausing...")
             local canContinue = waitForSafety(root, false)
             if not canContinue then return false end
             -- Reset tween timing from current position
-            print("[PuppyHub] ▶️ Danger cleared, resuming tween...")
+            print("[PuppyHub] Danger cleared, resuming tween...")
             startTime = tick() - (tick() - startTime) -- Preserve elapsed progress
             startCFrame = root.CFrame
         end
@@ -827,15 +866,25 @@ local function AutoLoginRoutine()
         if loadingScreen then
             repeat task.wait(0.5) until loadingScreen.BackgroundTransparency >= 0.9 or not loadingScreen.Visible
         end
+
+        local autoLoginGate = waitForAutoLoginContinue(menuScreen, 30)
+        if autoLoginGate ~= "Continue" then
+            warn("[PuppyHub] Auto-login aborted before Continue became available.")
+            return
+        end
         
         -- ============================================================
         -- NATIVE LoadIntoGame REPLICATION
         -- Mirrors the decompiled function without needing VIM clicks
         -- ============================================================
-        task.wait(1)
+        task.wait(0.25)
         print("[PuppyHub] Replicating native LoadIntoGame sequence...")
         
         -- Step 1: Hide menu frames
+        pcall(function()
+            local menuSelect = menuScreen:FindFirstChild("MenuSelect")
+            if menuSelect then menuSelect.Visible = false end
+        end)
         pcall(function()
             local menu = menuScreen:FindFirstChild("Menu")
             if menu then menu.Visible = false end
@@ -909,17 +958,6 @@ local function AutoLoginRoutine()
             hopImmediatelyForLoginDanger(reason)
             return
         end
-        if not safe then
-            if Config.ServerHopOnDanger then
-                print("[PuppyHub] ⚠️ Unsafe before tween: " .. tostring(reason) .. ". Hopping INSTANTLY...")
-                local char = LocalPlayer.Character
-                local root = char and char:FindFirstChild("HumanoidRootPart")
-                if root then root.CFrame = CFrame.new(-3933, 1120, -4571) end
-                if AutoFarmHandler.executeServerHop then AutoFarmHandler.executeServerHop() return end
-            else
-                print("[PuppyHub] ⚠️ Unsafe: " .. tostring(reason) .. ". Server Hop disabled, staying.")
-            end
-        end
     end
     
     RemoveForcefield()
@@ -979,8 +1017,6 @@ local function AutoLoginRoutine()
         if Config.CorruptedESP and CorruptedESPHandler then pcall(function() CorruptedESPHandler:enable() end) end
         if Config.TransTrail and TransTrail then pcall(function() TransTrail:enable() end) end
         if Config.NoFog and NoFog then pcall(function() NoFog:enable() end) end
-        if Config.FallDamageToggle then pcall(function() NegateFall() end) end
-        if Config.PreventVoidToggle then pcall(function() _preventVoidCheck = true end) end
         print("[PuppyHub] Visual settings restored!")
     end)
 end
@@ -1006,8 +1042,6 @@ if BossFarm then
     end
 end
 
--- Auto-login ONLY on actual server hop (marker file written by hop systems)
--- This prevents forcefield tween + continue button on fresh manual joins
 local currentPlaceId = game.PlaceId
 local isRedirectHoldingPlace = currentPlaceId == BLOODLINES_REDIRECT_PLACE_ID
 local isMainBloodlinesPlace = currentPlaceId == BLOODLINES_MAIN_PLACE_ID
@@ -1018,7 +1052,7 @@ if isfile and isfile(HOP_MARKER_FILE) then
     if isMainBloodlinesPlace then
         shouldConsumeHopMarker = true
     end
-    print("[PuppyHub] ✅ Hop marker detected — this is a server hop redirect.")
+    print("[PuppyHub] Hop marker detected - this is a server hop redirect.")
 end
 
 if isActualHop and isRedirectHoldingPlace then
@@ -1027,6 +1061,10 @@ end
 
 local isFarmRedirect = isActualHop and (Config.AutoSummon or Config.BossFarmEnabled or Config.BossLoopEnabled)
 ForceSenseHopOnBossFarmLogin = isActualHop and (Config.BossFarmEnabled or Config.BossLoopEnabled)
+
+if Config.BossLoopEnabled or isFarmRedirect then
+    setBossSafetyProtectionsEnabled(true)
+end
 
 -- If NOT a farm redirect, clear visual toggles so they don't auto-enable on fresh join
 if not isFarmRedirect then
@@ -1043,9 +1081,9 @@ if not isFarmRedirect then
     Config.TransTrail = false
     Config.NoFog = false
     if not isActualHop then
-        print("[PuppyHub] Fresh join — no hop marker, skipping auto-login.")
+        print("[PuppyHub] Fresh join - no hop marker, skipping auto-login.")
     else
-        print("[PuppyHub] Hop marker found but no farming active — visual toggles reset.")
+        print("[PuppyHub] Hop marker found but no farming active - visual toggles reset.")
     end
 end
 
@@ -1060,7 +1098,7 @@ end
 -- ============================================================================
 
 local Window = Library:CreateWindow({
-    Title = '[Puppy Hub] Bloodlines 🩸',
+    Title = '[Puppy Hub] Bloodlines',
     Center = not isFarmRedirect,
     AutoShow = true, TabPadding = 8, MenuFadeTime = 0.2,
     Size = UDim2.fromOffset(700, 600)
@@ -1199,7 +1237,7 @@ MoveGroup:AddButton('Unlock All Chakra Points', function()
                 if result == true then
                     point.Unlocked.Value = true
                     unlocked = unlocked + 1
-                    print("[PuppyHub] ✅ Unlocked:", point.PointName.Value)
+                    print("[PuppyHub] Unlocked:", point.PointName.Value)
                 end
             end)
             if not success then
@@ -1429,6 +1467,7 @@ if BossFarm and AutoFarmHandler then
             Config.BossFarmEnabled = val
             SaveConfig()
             if val then
+                setBossSafetyProtectionsEnabled(true)
                 BossFarm.start()
             else
                 BossFarm.stop()
@@ -1450,6 +1489,7 @@ if BossFarm and AutoFarmHandler then
             Config.BossLoopEnabled = val
             SaveConfig()
             if val then
+                setBossSafetyProtectionsEnabled(true)
                 BossFarm.startLoop()
             else
                 BossFarm.stopLoop()
@@ -1597,7 +1637,7 @@ if BossFarm and AutoFarmHandler then
             if BossFarm.isRunning() then
                 local weapon = BossFarm.getDetectedWeapon()
                 local boss = BossFarm.getCurrentBoss() or "None"
-                WeaponLabel:SetText("⚔ " .. weapon .. " | 🎯 " .. boss)
+                WeaponLabel:SetText("Weapon: " .. weapon .. " | Boss: " .. boss)
             else
                 WeaponLabel:SetText("Weapon: (idle)")
             end
