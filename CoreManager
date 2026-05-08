@@ -171,6 +171,8 @@ local ThemeManager = loadstring(game:HttpGet(REPO_BASE_URL .. 'addons/ThemeManag
 task.wait()
 local SaveManager = loadstring(game:HttpGet(REPO_BASE_URL .. 'addons/SaveManager.lua'))()
 task.wait()
+ThemeManager:SetLibrary(Library)
+SaveManager:SetLibrary(Library)
 print("[PuppyHub] UI Library loaded!")
 
 -- Helper: Safe Require (with yield between loads)
@@ -362,6 +364,7 @@ local function setBossSafetyProtectionsEnabled(enabled)
 end
 
 local CoreConnections = {} -- Holds explicit RunService connections
+local tween = nil
 
 -- ============================================================================
 -- MANUAL CONNECTION MANAGEMENT (Loop Controls)
@@ -472,13 +475,15 @@ local function StartMovementLoops()
         local dir = hum.MoveDirection
 
         if dir.Magnitude > 0 then
-            local speed = hum.WalkSpeed
+            local stepDistance = math.max(0.01, State.NoclipSpeed * 0.01)
+            local tweenTime = math.max(0.01, State.NoclipTween * 0.05)
+            local tweenInfo = TweenInfo.new(tweenTime, Enum.EasingStyle.Linear, Enum.EasingDirection.Out)
 
             -- final direction for where the HRP should move
-            local targetCF = root.CFrame + (dir * speed * 0.1)
+            local targetCF = root.CFrame + (dir * stepDistance)
 
             if tween then tween:Cancel() end
-            tween = TweenService:Create(root, info, {
+            tween = TweenService:Create(root, tweenInfo, {
                 CFrame = targetCF
             })
             tween:Play()
@@ -775,14 +780,18 @@ local function waitForAutoLoginContinue(menuScreen, timeoutSeconds)
         local loadingScreen = menuScreen:FindFirstChild("LoadingScreen")
         local loadingDone = not loadingScreen
             or not loadingScreen.Visible
-            or loadingScreen.BackgroundTransparency >= 0.9
-        local menuReady = menu.Visible and menu.AbsoluteSize.X > 0 and menu.AbsoluteSize.Y > 0
+            or loadingScreen.BackgroundTransparency >= 0.98
+        local menuReady = menu.Visible
+            and menu.AbsoluteSize.X > 0
+            and menu.AbsoluteSize.Y > 0
+            and menu.Position.X.Offset >= -5
+            and menu.Position.Y.Offset <= -190
 
         if loadingDone and menuReady and continueButton.Visible then
             return "Continue"
         end
 
-        if loadingDone and newGameButton and newGameButton.Visible then
+        if loadingDone and menuReady and newGameButton and newGameButton.Visible then
             warn("[PuppyHub] Auto-login reached menu but only NewGame is visible.")
             return nil
         end

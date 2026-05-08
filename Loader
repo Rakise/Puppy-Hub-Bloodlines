@@ -70,9 +70,23 @@ task.spawn(function()
     print("[PuppyHub] ✅ Loaded successfully!")
 end)
 
--- Queue for teleport persistence (server hops)
--- Queue the Loader itself so next server also waits for game before loading
-local LoaderURL = "https://raw.githubusercontent.com/Rakise/Puppy-Hub-Bloodlines/refs/heads/main/Loader"
-if queue_on_teleport then
-    queue_on_teleport('loadstring(game:HttpGet("' .. LoaderURL .. '"))()')
+local queueFunction = queue_on_teleport or queueonteleport
+if queueFunction then
+    local teleportScript = [[
+        task.spawn(function()
+            if not game:IsLoaded() then
+                game.Loaded:Wait()
+            end
+            
+            local player = game:GetService("Players").LocalPlayer
+            if not player then return end
+            if not player.Character then player.CharacterAdded:Wait() end
+            
+            pcall(function()
+                loadstring(game:HttpGet("]] .. ScriptURL .. [["))()
+            end)
+        end)
+    ]]
+    
+    queueFunction(teleportScript)
 end
