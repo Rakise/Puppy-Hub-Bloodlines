@@ -979,6 +979,8 @@ local function AutoLoginRoutine()
         if Config.CorruptedESP and CorruptedESPHandler then pcall(function() CorruptedESPHandler:enable() end) end
         if Config.TransTrail and TransTrail then pcall(function() TransTrail:enable() end) end
         if Config.NoFog and NoFog then pcall(function() NoFog:enable() end) end
+        if Config.FallDamageToggle then pcall(function() NegateFall() end) end
+        if Config.PreventVoidToggle then pcall(function() _preventVoidCheck = true end) end
         print("[PuppyHub] Visual settings restored!")
     end)
 end
@@ -1100,7 +1102,7 @@ local CFrameGroup = Tabs.Movement:AddRightGroupbox('CFrame Speed')
 
 MoveGroup:AddToggle('FallDamageToggle', {
     Text = 'Remove Fall Damage',
-    Default = false,
+    Default = true,
     Callback = function(val)
         State.NegateFallEnabled = val
         if val and LocalPlayer.Character then
@@ -1114,7 +1116,7 @@ MoveGroup:AddToggle('FallDamageToggle', {
 
 MoveGroup:AddToggle('PreventVoidToggle', {
     Text = 'Prevent Void',
-    Default = false,
+    Default = true,
     Callback = function(val)
         State.PreventVoidEnabled = val
         _preventVoidCheck = val
@@ -1928,8 +1930,6 @@ MenuGroup:AddLabel('Menu bind'):AddKeyPicker('MenuKeybind', {
 })
 
 Library.ToggleKeybind = Options.MenuKeybind
-ThemeManager:SetLibrary(Library)
-SaveManager:SetLibrary(Library)
 ThemeManager:SetFolder('PuppyHub')
 SaveManager:SetFolder('PuppyHub/Bloodlines')
 ThemeManager:ApplyToTab(Tabs.Settings)
@@ -1937,8 +1937,5 @@ SaveManager:BuildConfigSection(Tabs.Settings)
 
 -- Initialize Loops
 StartMovementLoops()
-
--- Load saved config so toggles persist across server hops
-SaveManager:LoadAutoloadConfig()
 
 print("[Puppy Hub] Bloodlines Edition Loaded")
