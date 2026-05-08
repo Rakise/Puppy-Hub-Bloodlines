@@ -8,7 +8,7 @@ local TweenService = game:GetService("TweenService")
 local Workspace = game:GetService("Workspace")
 local HttpService = game:GetService("HttpService")
 local GuiService = game:GetService("GuiService")
-local VirtualUser = Instance.new("VirtualUser")
+local VirtualUser = game:GetService("VirtualUser")
 
 local VirtualInputManager = (function()
     local ok, vim = pcall(function() return Instance.new("VirtualInputManager") end)
