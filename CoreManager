@@ -8,6 +8,7 @@ local TweenService = game:GetService("TweenService")
 local Workspace = game:GetService("Workspace")
 local HttpService = game:GetService("HttpService")
 local GuiService = game:GetService("GuiService")
+local VirtualUser = Instance.new("VirtualUser")
 
 local VirtualInputManager = (function()
     local ok, vim = pcall(function() return Instance.new("VirtualInputManager") end)
@@ -112,6 +113,68 @@ end
 
 local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
+
+local function installAntiIdle()
+    pcall(function()
+        if getconnections then
+            for _, conn in ipairs(getconnections(LocalPlayer.Idled)) do
+                pcall(function()
+                    if conn.Disable then
+                        conn:Disable()
+                    elseif conn.Disconnect then
+                        conn:Disconnect()
+                    end
+                end)
+            end
+        end
+    end)
+
+    pcall(function()
+        LocalPlayer.Idled:Connect(function()
+            pcall(function()
+                VirtualUser:CaptureController()
+                VirtualUser:ClickButton2(Vector2.new())
+            end)
+            if VirtualInputManager then
+                pcall(function()
+                    VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.RightShift, false, game)
+                    task.wait()
+                    VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.RightShift, false, game)
+                end)
+            end
+        end)
+    end)
+
+    if hookmetamethod and newcclosure then
+        local fakeIdledSignal = {}
+        function fakeIdledSignal:Connect()
+            return {
+                Connected = true,
+                Disconnect = function() end,
+                disconnect = function() end,
+            }
+        end
+        fakeIdledSignal.connect = fakeIdledSignal.Connect
+        function fakeIdledSignal:Wait()
+            while true do
+                task.wait(3600)
+            end
+        end
+        fakeIdledSignal.wait = fakeIdledSignal.Wait
+
+        local oldIndex
+        oldIndex = hookmetamethod(game, "__index", newcclosure(function(self, key)
+            if not checkcaller() and self == LocalPlayer and key == "Idled" then
+                return fakeIdledSignal
+            end
+            return oldIndex(self, key)
+        end))
+    end
+
+    print("[PuppyHub] Anti-idle installed.")
+end
+
+installAntiIdle()
 
 -- Constants
 local BRAZIL_HUB_BASE_URL = "https://ghproxy.net/https://raw.githubusercontent.com/Rakise/Puppy-Hub-Bloodlines/refs/heads/main/"

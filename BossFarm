@@ -107,7 +107,7 @@ local BOSS_CONFIGS = {
         lootSpot = Vector3.new(-546.7, -546.9, -1461.6),
     },
     ["Haku Boss"] = {
-        height = 10.75, positionAbove = true,
+        height = 18, positionAbove = true, minCombatHeight = 18,
         hasIceDragon = true,
         lootSpot = Vector3.new(-3788.1, -238.5, -9723.9),
     },
@@ -512,10 +512,23 @@ function Utils.getBossRoot(model)
 end
 
 -- Direct teleport (fall damage handled by NegateFall injection in CoreManager)
+function Utils.zeroRootPhysics(rootPart)
+    if not rootPart then return end
+    pcall(function()
+        rootPart.AssemblyLinearVelocity = Vector3.new()
+        rootPart.AssemblyAngularVelocity = Vector3.new()
+    end)
+    pcall(function()
+        rootPart.Velocity = Vector3.new()
+        rootPart.RotVelocity = Vector3.new()
+    end)
+end
+
 function Utils.safeTeleport(targetCFrame)
     local pData = Utils.getPlayerData()
     if not pData then return end
     pData.rootPart.CFrame = targetCFrame
+    Utils.zeroRootPhysics(pData.rootPart)
 end
 function Utils.disconnectAll()
     for i = #State.connections, 1, -1 do
@@ -1528,6 +1541,7 @@ function Safety.forceTeleport(targetPosition)
         Utils.safeTeleport(targetCFrame)
     else
         playerData.rootPart.CFrame = targetCFrame
+        Utils.zeroRootPhysics(playerData.rootPart)
     end
 end
 
@@ -1678,6 +1692,7 @@ function Safety.clearForcedPosition(reasonMatch)
     end
     State.forcedPosition = nil
     if State.mode == "dodging" then
+        State.combatStabilizeUntil = math.max(State.combatStabilizeUntil or 0, tick() + 0.9)
         if State.running and State.currentBoss and not State.hideState.active then
             Utils.setMode("engaging")
         else
@@ -2949,6 +2964,13 @@ end
 -- ============================================
 local Positioning = {}
 
+function Positioning.applyCFrame(rootPart, cframe)
+    if not rootPart or not cframe then return end
+
+    rootPart.CFrame = cframe
+    Utils.zeroRootPhysics(rootPart)
+end
+
 function Positioning.getMinimumCombatOffset(playerRoot, bossRoot)
     local playerHalfHeight = (playerRoot and playerRoot.Size and playerRoot.Size.Y or 4) * 0.5
     local bossHalfHeight = (bossRoot and bossRoot.Size and bossRoot.Size.Y or 8) * 0.5
@@ -2963,7 +2985,7 @@ function Positioning.getCombatCFrame(playerRoot, bossRoot, config)
     local minimumOffset = Positioning.getMinimumCombatOffset(playerRoot, bossRoot)
 
     if tick() < (State.combatStabilizeUntil or 0) then
-        minimumOffset = minimumOffset + 6
+        minimumOffset = minimumOffset + 10
     end
 
     if not config.positionAbove and (State.bossHeightBoost or 0) > 0 then
@@ -2972,7 +2994,7 @@ function Positioning.getCombatCFrame(playerRoot, bossRoot, config)
     end
 
     local direction = config.positionAbove and 1 or -1
-    local safeHeight = math.max(math.abs(totalHeight), minimumOffset)
+    local safeHeight = math.max(math.abs(totalHeight), minimumOffset, config.minCombatHeight or 0)
     local targetPosition = bossRoot.Position + Vector3.new(0, direction * safeHeight, 0)
     return CFrame.lookAt(targetPosition, bossRoot.Position)
 end
@@ -2988,7 +3010,7 @@ function Positioning.primeCombatOffsets(model, config)
 
     local initialCFrame = Positioning.getCombatCFrame(playerData.rootPart, bossRoot, config)
     if initialCFrame then
-        playerData.rootPart.CFrame = initialCFrame
+        Positioning.applyCFrame(playerData.rootPart, initialCFrame)
     end
 end
 
@@ -3037,7 +3059,7 @@ function Positioning.applyBossDeathHold(playerRoot)
         return false
     end
 
-    playerRoot.CFrame = holdCFrame
+    Positioning.applyCFrame(playerRoot, holdCFrame)
     return true
 end
 
@@ -3076,13 +3098,13 @@ function Positioning.startAnchoring(model, config)
             else
                 local forced = Safety.getForcedPosition()
                 if forced then
-                    pData.rootPart.CFrame = CFrame.new(forced.position)
+                    Positioning.applyCFrame(pData.rootPart, CFrame.new(forced.position))
                     return
                 end
 
                 local combatCFrame = Positioning.getCombatCFrame(pData.rootPart, bossRoot, config)
                 if combatCFrame then
-                    pData.rootPart.CFrame = combatCFrame
+                    Positioning.applyCFrame(pData.rootPart, combatCFrame)
                 end
             end
         end)
@@ -3318,6 +3340,12 @@ function Farm.farmBoss(hum, model, bossName)
         
         -- Health threshold check — wait for full regen before continuing
         if cPData.humanoid.Health < State.healthThreshold then
+            if State.deathCheckInProgress or cPData.humanoid.Health <= 0 then
+                Utils.recordEvent("Regen Skipped", "death check active")
+                task.wait(0.05)
+                continue
+            end
+
             Utils.notify("Health low! Retreating to regen...", 3)
             Farm.stopCurrent()
             Utils.setMode("regen")
@@ -3332,6 +3360,10 @@ function Farm.farmBoss(hum, model, bossName)
             while State.running do
                 local regenData = Utils.getPlayerData()
                 if not regenData then break end
+                if State.deathCheckInProgress or regenData.humanoid.Health <= 0 then
+                    Utils.recordEvent("Regen Abort", "death check active")
+                    break
+                end
 
                 local cache = State.threatCache or {}
                 local hasThreat = cache.senseActive or cache.nearby
@@ -3352,7 +3384,7 @@ function Farm.farmBoss(hum, model, bossName)
                     if horizontalDist > 2 or math.abs(verticalDelta) > 2 then
                         Utils.recordEvent("Regen Hold", string.format("h=%.1f y=%.1f", horizontalDist, verticalDelta))
                     end
-                    regenData.rootPart.CFrame = CFrame.new(safeSpot)
+                    Positioning.applyCFrame(regenData.rootPart, CFrame.new(safeSpot))
                 end
                 
                 if regenData.humanoid.Health >= regenData.humanoid.MaxHealth then
@@ -3366,7 +3398,7 @@ function Farm.farmBoss(hum, model, bossName)
             
             -- After regen, DON'T break — re-enter the loop to re-engage the SAME boss
             -- We need to re-find the boss since we cleared state
-            if State.running then
+            if State.running and not State.deathCheckInProgress then
                 local reHum, reModel = Detection.findBoss(bossName)
                 if reHum and reModel then
                     -- Re-setup everything for this boss
