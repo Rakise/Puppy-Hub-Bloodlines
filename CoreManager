@@ -828,29 +828,92 @@ end
 
 local function AutoLoginRoutine()
     print("[PuppyHub] Starting Auto-Login Routine...")
-    local clientGui = PlayerGui:WaitForChild("ClientGui", 30)
-    if not clientGui then return end
-    
-    local menuScreen = clientGui:WaitForChild("MenuScreen", 10)
-    if menuScreen then
-        local loadingScreen = menuScreen:WaitForChild("LoadingScreen", 10)
-        if loadingScreen then
-            repeat task.wait(0.5) until loadingScreen.BackgroundTransparency >= 0.9 or not loadingScreen.Visible
+    local autoLoginDeadline = tick() + 60
+    local loginCompleted = false
+
+    while tick() < autoLoginDeadline do
+        local char = LocalPlayer.Character
+        local hum = char and char:FindFirstChildOfClass("Humanoid")
+        if not char or not hum or hum.Health <= 0 then
+            task.wait(0.25)
+            continue
         end
-        local menuFrame = menuScreen:WaitForChild("Menu", 5)
-        if menuFrame then
-            local continueBtn = menuFrame:FindFirstChild("Continue")
-            if continueBtn then
-                task.wait(1)
-                print("[PuppyHub] Found Continue button, attempting click...")
-                
-                -- Virtual click with proper GuiInset handling
-                VirtualMouse.clickGui(continueBtn)
-                print("[PuppyHub] Continue clicked!")
-                
-                task.wait(1)
+
+        local clientGui = PlayerGui:FindFirstChild("ClientGui")
+        local menuScreen = clientGui and clientGui:FindFirstChild("MenuScreen")
+        if not menuScreen then
+            task.wait(0.25)
+            continue
+        end
+
+        local loadingScreen = menuScreen:FindFirstChild("LoadingScreen")
+        if loadingScreen and loadingScreen.Visible and loadingScreen.BackgroundTransparency < 0.9 then
+            task.wait(0.25)
+            continue
+        end
+
+        local menuFrame = menuScreen:FindFirstChild("Menu")
+        local continueBtn = menuFrame and menuFrame:FindFirstChild("Continue")
+        if continueBtn and continueBtn.Visible and continueBtn:IsDescendantOf(PlayerGui) then
+            task.wait(1)
+
+            if LocalPlayer.Character ~= char then
+                print("[PuppyHub] Character changed before Continue click. Reacquiring UI...")
+                task.wait(0.25)
+                continue
+            end
+
+            if PlayerGui:FindFirstChild("ClientGui") ~= clientGui then
+                print("[PuppyHub] ClientGui recreated before Continue click. Reacquiring UI...")
+                task.wait(0.25)
+                continue
+            end
+
+            if not continueBtn:IsDescendantOf(PlayerGui) then
+                print("[PuppyHub] Continue button became stale before click. Reacquiring UI...")
+                task.wait(0.25)
+                continue
+            end
+
+            print("[PuppyHub] Found Continue button, attempting click...")
+            VirtualMouse.clickGui(continueBtn)
+            print("[PuppyHub] Continue clicked!")
+
+            local postClickDeadline = tick() + 8
+            while tick() < postClickDeadline do
+                local currentChar = LocalPlayer.Character
+                local currentHum = currentChar and currentChar:FindFirstChildOfClass("Humanoid")
+                local currentGui = PlayerGui:FindFirstChild("ClientGui")
+
+                if currentChar ~= char or not currentHum or currentHum.Health <= 0 then
+                    print("[PuppyHub] Character died or changed after Continue click. Reacquiring UI...")
+                    break
+                end
+
+                if currentGui ~= clientGui then
+                    print("[PuppyHub] ClientGui recreated after Continue click. Reacquiring UI...")
+                    break
+                end
+
+                if not menuScreen:IsDescendantOf(PlayerGui) or not menuScreen.Visible or (menuFrame and not menuFrame.Visible) then
+                    loginCompleted = true
+                    break
+                end
+
+                task.wait(0.2)
+            end
+
+            if loginCompleted then
+                break
             end
         end
+
+        task.wait(0.25)
+    end
+
+    if not loginCompleted then
+        warn("[PuppyHub] Auto-login did not reach a stable post-Continue state. Aborting resume for safety.")
+        return
     end
     
     task.wait(7)
