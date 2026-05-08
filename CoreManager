@@ -482,6 +482,7 @@ local Config = {
     BossAutoLootOnKill = true,
     BossAutoSellTrinkets = false,
     BossAutoSellGems = false,
+    BossAutoSellFruits = false,
     BossWebhookURL = "",
     -- Visual/Misc persistence (cross-hop)
     PlayerESP = false,
@@ -529,6 +530,7 @@ local function LoadConfig()
             if decoded.BossAutoLootOnKill ~= nil then Config.BossAutoLootOnKill = decoded.BossAutoLootOnKill end
             if decoded.BossAutoSellTrinkets ~= nil then Config.BossAutoSellTrinkets = decoded.BossAutoSellTrinkets end
             if decoded.BossAutoSellGems ~= nil then Config.BossAutoSellGems = decoded.BossAutoSellGems end
+            if decoded.BossAutoSellFruits ~= nil then Config.BossAutoSellFruits = decoded.BossAutoSellFruits end
             if decoded.BossWebhookURL ~= nil then Config.BossWebhookURL = decoded.BossWebhookURL end
             -- Visual/Misc
             if decoded.PlayerESP ~= nil then Config.PlayerESP = decoded.PlayerESP end
@@ -946,6 +948,7 @@ local function AutoLoginRoutine()
         BossFarm.Settings.AutoLootOnKill = Config.BossAutoLootOnKill
         BossFarm.Settings.AutoSellTrinkets = Config.BossAutoSellTrinkets
         BossFarm.Settings.AutoSellGems = Config.BossAutoSellGems
+        BossFarm.Settings.AutoSellFruits = Config.BossAutoSellFruits
         BossFarm.Settings.WebhookURL = Config.BossWebhookURL or ""
         
         task.wait(2) -- Let game fully load
@@ -993,6 +996,7 @@ if BossFarm then
     BossFarm.Settings.AutoLootOnKill = Config.BossAutoLootOnKill
     BossFarm.Settings.AutoSellTrinkets = Config.BossAutoSellTrinkets
     BossFarm.Settings.AutoSellGems = Config.BossAutoSellGems
+    BossFarm.Settings.AutoSellFruits = Config.BossAutoSellFruits
     BossFarm.Settings.SelectedBosses = Config.BossSelectedBosses or {}
     BossFarm.Settings.WebhookURL = Config.BossWebhookURL or ""
     if Config.BossWeaponHeightBoost ~= nil then
@@ -1114,10 +1118,18 @@ MoveGroup:AddToggle('PreventVoidToggle', {
     Callback = function(val)
         State.PreventVoidEnabled = val
         _preventVoidCheck = val
-        if val and LocalPlayer.Character then
-            injectVoidImmunity(LocalPlayer.Character)
-        elseif not val and LocalPlayer.Character then
-            LocalPlayer.Character:SetAttribute("VoidResistance", nil)
+        if val then
+            -- Inject attribute + start physical barriers
+            if LocalPlayer.Character then
+                injectVoidImmunity(LocalPlayer.Character)
+            end
+            startVoidBarrierLoop()
+        else
+            -- Remove attribute + clean up barriers
+            if LocalPlayer.Character then
+                LocalPlayer.Character:SetAttribute("VoidResistance", nil)
+            end
+            stopVoidBarrierLoop()
         end
     end
 })
@@ -1167,6 +1179,38 @@ MoveGroup:AddSlider('JumpPowerSlider', {
         State.JumpPower = val
     end
 })
+
+MoveGroup:AddButton('Unlock All Chakra Points', function()
+    local chakraFolder = workspace:FindFirstChild("ChakraPoints")
+    if not chakraFolder then
+        warn("[PuppyHub] No ChakraPoints folder in workspace!")
+        return
+    end
+    
+    local unlocked = 0
+    local skipped = 0
+    
+    for _, point in ipairs(chakraFolder:GetChildren()) do
+        if point:FindFirstChild("Unlocked") and point.Unlocked.Value == false then
+            local success = pcall(function()
+                local result = DataFunction:InvokeServer("ChakraPointUnlock", point)
+                if result == true then
+                    point.Unlocked.Value = true
+                    unlocked = unlocked + 1
+                    print("[PuppyHub] ✅ Unlocked:", point.PointName.Value)
+                end
+            end)
+            if not success then
+                warn("[PuppyHub] Failed to unlock:", point.PointName.Value)
+            end
+            task.wait(0.5) -- Cooldown between unlocks to avoid server rate-limiting
+        else
+            skipped = skipped + 1
+        end
+    end
+    
+    print("[PuppyHub] Chakra Points done! Unlocked:", unlocked, "| Already known:", skipped)
+end)
 
 -- Fly Group
 FlyGroup:AddToggle('FlyToggle', {
@@ -1894,5 +1938,7 @@ SaveManager:BuildConfigSection(Tabs.Settings)
 -- Initialize Loops
 StartMovementLoops()
 
+-- Load saved config so toggles persist across server hops
+SaveManager:LoadAutoloadConfig()
 
 print("[Puppy Hub] Bloodlines Edition Loaded")

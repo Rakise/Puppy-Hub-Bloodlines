@@ -70,6 +70,7 @@ BossFarm.Settings = {
     -- Auto Sell
     AutoSellTrinkets = false,
     AutoSellGems = false,
+    AutoSellFruits = false,
     -- Webhook
     WebhookURL = "",
 }
@@ -189,6 +190,48 @@ local TRINKET_VALUES = {
     ["Silver Enclosed Ring"] = 3, ["Silver Ring"] = 2, ["Silver Bracelet"] = 2,
     ["Gold Enclosed Ring"] = 5, ["Gold Necklace"] = 5, ["Silver Necklace"] = 3,
     ["Gold Bracelet"] = 3, ["Gold Ring"] = 5,
+}
+
+local FRUIT_VALUES = {
+    ["Apple"] = 2,
+    ["Alluring Apple"] = 5,
+    ["Frosty Pear"] = 2,
+    ["Pear"] = 2,
+    ["Banana"] = 2,
+    ["Enchanted Banana"] = 2,
+    ["Orange"] = 2,
+    ["Mango"] = 4,
+    ["Pineapple"] = 5,
+    ["Watermelon"] = 5,
+    ["Peach"] = 5,
+}
+
+local PRICE_MODIFIERS = {
+    ["Own"] = { ["Booming"] = {Buy = 0.8, Sell = 1.2}, ["Average"] = {Buy = 1, Sell = 1}, ["Struggling"] = {Buy = 1.2, Sell = 0.8} },
+    ["Allied"] = { ["Booming"] = {Buy = 0.85, Sell = 1.15}, ["Average"] = {Buy = 1, Sell = 1}, ["Struggling"] = {Buy = 1.25, Sell = 0.75} },
+    ["Neutral"] = { ["Booming"] = {Buy = 1.25, Sell = 0.75}, ["Average"] = {Buy = 1.3, Sell = 0.7}, ["Struggling"] = {Buy = 1.35, Sell = 0.65} },
+    ["War"] = { ["Booming"] = {Buy = 2, Sell = 0.5}, ["Average"] = {Buy = 2, Sell = 0.5}, ["Struggling"] = {Buy = 2, Sell = 0.5} }
+}
+
+local FRUIT_VALUES = {
+    ["Apple"] = 2,
+    ["Alluring Apple"] = 5,
+    ["Frosty Pear"] = 2,
+    ["Pear"] = 2,
+    ["Banana"] = 2,
+    ["Enchanted Banana"] = 2,
+    ["Orange"] = 2,
+    ["Mango"] = 4,
+    ["Pineapple"] = 5,
+    ["Watermelon"] = 5,
+    ["Peach"] = 5,
+}
+
+local PRICE_MODIFIERS = {
+    ["Own"] = { ["Booming"] = {Buy = 0.8, Sell = 1.2}, ["Average"] = {Buy = 1, Sell = 1}, ["Struggling"] = {Buy = 1.2, Sell = 0.8} },
+    ["Allied"] = { ["Booming"] = {Buy = 0.85, Sell = 1.15}, ["Average"] = {Buy = 1, Sell = 1}, ["Struggling"] = {Buy = 1.25, Sell = 0.75} },
+    ["Neutral"] = { ["Booming"] = {Buy = 1.25, Sell = 0.75}, ["Average"] = {Buy = 1.3, Sell = 0.7}, ["Struggling"] = {Buy = 1.35, Sell = 0.65} },
+    ["War"] = { ["Booming"] = {Buy = 2, Sell = 0.5}, ["Average"] = {Buy = 2, Sell = 0.5}, ["Struggling"] = {Buy = 2, Sell = 0.5} }
 }
 
 -- ============================================
@@ -3610,93 +3653,108 @@ function BossLoop.start()
             State.bossLoopIndex = 0
             
             -- Auto sell at end of loop
-            if BossFarm.Settings.AutoSellTrinkets or BossFarm.Settings.AutoSellGems then
+            if BossFarm.Settings.AutoSellTrinkets or BossFarm.Settings.AutoSellGems or BossFarm.Settings.AutoSellFruits then
                 Utils.log("Loop complete — running auto sell...")
                 pcall(function()
                     local dataFunc = GetDataFunction()
-                    if not dataFunc then
-                        Utils.log("DataFunction not found, skipping sell.")
-                        return
+                    if not dataFunc then return end
+                    
+                    local playerData = nil
+                    pcall(function() playerData = dataFunc:InvokeServer("GetData") end)
+                    if type(playerData) ~= "table" then return end
+
+                    local VillageData, villageMonth, villageWeek
+                    pcall(function()
+                        VillageData, villageMonth, villageWeek = dataFunc:InvokeServer("getVillageData")
+                    end)
+
+                    local function getVillageData(p83)
+                        if not VillageData or not villageMonth or not villageWeek then return nil end
+                        local mStr, wStr = "Month" .. tostring(villageMonth), "Week" .. tostring(villageWeek)
+                        if not VillageData[mStr] or not VillageData[mStr][wStr] then return nil end
+                        return VillageData[mStr][wStr][p83]
+                    end
+
+                    local function getEconomy(p88)
+                        if p88 == "Rogue" then return "Struggling" end
+                        if p88 == "Neutral" or not p88 then return "Average" end
+                        local vData = getVillageData(p88)
+                        return vData and vData.Politics.Economy or "Average"
+                    end
+
+                    local function getVillageRelationship(p89, p90)
+                        if not p89 or not p90 then return nil end
+                        if p89 == "Rogue" or p90 == "Rogue" then return "War" end
+                        if p89 == "Neutral" or p90 == "Neutral" then return "Neutral" end
+                        local v91, v92 = getVillageData(p89), getVillageData(p90)
+                        if not v91 or not v92 then return "Neutral" end
+                        if p89 == p90 then return "Own" end
+                        if table.find(v91.Politics.Alliances, p90) or table.find(v92.Politics.Alliances, p89) then return "Allied" end
+                        if table.find(v91.Politics.Wars, p90) or table.find(v92.Politics.Wars, p89) then return "War" end
+                        return "Neutral"
                     end
                     
-                    if BossFarm.Settings.AutoSellTrinkets then
-                        -- Calculate trinket sell value from inventory
-                        local trinketValue = 0
-                        pcall(function()
-                            local gui = LocalPlayer.PlayerGui
-                            local clientGui = gui and gui:FindFirstChild("ClientGui")
-                            local mainframe = clientGui and clientGui:FindFirstChild("Mainframe")
-                            local loadout = mainframe and mainframe:FindFirstChild("Loadout")
-                            if not loadout then return end
-                            local inv = loadout:FindFirstChild("Inventory")
-                            local scroll = inv and inv:FindFirstChild("InventoryScroll")
-                            if not scroll then return end
-                            for i = 1, 105 do
-                                pcall(function()
-                                    local slot = scroll:FindFirstChild("InvSlot" .. i)
-                                    if not slot then return end
-                                    local slotText = slot:FindFirstChild("SlotText")
-                                    local itemName = slotText and slotText:IsA("TextLabel") and slotText.Text or ""
-                                    local val = TRINKET_VALUES[itemName]
-                                    if val then
-                                        local qty = 1
-                                        pcall(function()
-                                            local itemNum = slot:FindFirstChild("ItemNumber")
-                                            local numLabel = itemNum and itemNum:FindFirstChild("Number")
-                                            if numLabel and numLabel:IsA("TextLabel") and numLabel.Text ~= "" then
-                                                local n = numLabel.Text:match("x(%d+)") or numLabel.Text:match("(%d+)")
-                                                if n then qty = tonumber(n) or 1 end
-                                            end
-                                        end)
-                                        trinketValue = trinketValue + (val * qty)
-                                    end
-                                end)
+                    local function getModifiedPrice(basePrice, rel, econ, mode)
+                        if not rel or not econ or type(basePrice) ~= "number" then return basePrice end
+                        local modifier = PRICE_MODIFIERS[rel] and PRICE_MODIFIERS[rel][econ] and PRICE_MODIFIERS[rel][econ][mode] or 1
+                        return math.max(1, math.floor(basePrice * modifier))
+                    end
+
+                    local targetVillage = "Neutral"
+                    local relationship = getVillageRelationship(playerData.Village, targetVillage)
+                    local economy = getEconomy(targetVillage)
+                    
+                    -- Native calculateBulk replacement
+                    local trinketValue = 0
+                    local gemValue = 0
+                    local fruitCount = 0
+                    local fruitSlots = {}
+                    
+                    local function countItems(tbl)
+                        if type(tbl) ~= "table" then return end
+                        for slotId, slot in pairs(tbl) do
+                            if type(slot) == "table" and slot.Item then
+                                local qty = tonumber(slot.Quantity) or 1
+                                if TRINKET_VALUES[slot.Item] then
+                                    trinketValue = trinketValue + (TRINKET_VALUES[slot.Item] * qty)
+                                elseif GemSet[slot.Item] then
+                                    gemValue = gemValue + (10 * qty)
+                                elseif FRUIT_VALUES[slot.Item] or string.match(slot.Item, "Apple") or string.match(slot.Item, "Banana") then
+                                    fruitCount = fruitCount + qty
+                                    table.insert(fruitSlots, {id = slotId, qty = qty, price = FRUIT_VALUES[slot.Item] or 2})
+                                end
                             end
-                        end)
-                        if trinketValue > 0 then
-                            pcall(function() dataFunc:InvokeServer("SellingBulk", trinketValue, "Trinket") end)
-                            Utils.notify("💰 Auto-sold trinkets (" .. trinketValue .. " value)", 3)
-                            Webhook.send("💰 Auto Sell", "Bulk sold **Trinkets** (value: " .. trinketValue .. ")", 15844367)
                         end
                     end
                     
-                    if BossFarm.Settings.AutoSellGems then
-                        -- Calculate gem sell value
-                        local gemValue = 0
-                        pcall(function()
-                            local gui = LocalPlayer.PlayerGui
-                            local clientGui = gui and gui:FindFirstChild("ClientGui")
-                            local mainframe = clientGui and clientGui:FindFirstChild("Mainframe")
-                            local loadout = mainframe and mainframe:FindFirstChild("Loadout")
-                            if not loadout then return end
-                            local inv = loadout:FindFirstChild("Inventory")
-                            local scroll = inv and inv:FindFirstChild("InventoryScroll")
-                            if not scroll then return end
-                            for i = 1, 105 do
-                                pcall(function()
-                                    local slot = scroll:FindFirstChild("InvSlot" .. i)
-                                    if not slot then return end
-                                    local slotText = slot:FindFirstChild("SlotText")
-                                    local itemName = slotText and slotText:IsA("TextLabel") and slotText.Text or ""
-                                    if GemSet[itemName] then
-                                        local qty = 1
-                                        pcall(function()
-                                            local itemNum = slot:FindFirstChild("ItemNumber")
-                                            local numLabel = itemNum and itemNum:FindFirstChild("Number")
-                                            if numLabel and numLabel:IsA("TextLabel") and numLabel.Text ~= "" then
-                                                local n = numLabel.Text:match("x(%d+)") or numLabel.Text:match("(%d+)")
-                                                if n then qty = tonumber(n) or 1 end
-                                            end
-                                        end)
-                                        gemValue = gemValue + (10 * qty)
-                                    end
-                                end)
+                    countItems(playerData.Inventory)
+                    countItems(playerData.Loadout)
+                    
+                    if BossFarm.Settings.AutoSellTrinkets and trinketValue > 0 then
+                        local modPrice = getModifiedPrice(trinketValue, relationship, economy, "Sell")
+                        pcall(function() dataFunc:InvokeServer("SellingBulk", modPrice, "Trinket", nil, nil) end)
+                        Utils.notify("💰 Auto-sold trinkets (" .. modPrice .. " Ryo)", 3)
+                    end
+                    
+                    if BossFarm.Settings.AutoSellGems and gemValue > 0 then
+                        local modPrice = getModifiedPrice(gemValue, relationship, economy, "Sell")
+                        pcall(function() dataFunc:InvokeServer("SellingBulk", modPrice, "Gem", nil, nil) end)
+                        Utils.notify("💎 Auto-sold gems (" .. modPrice .. " Ryo)", 3)
+                    end
+                    
+                    if BossFarm.Settings.AutoSellFruits and fruitCount >= 99 then
+                        local totalEarned = 0
+                        for _, fruit in ipairs(fruitSlots) do
+                            local rawPrice = fruit.price * fruit.qty
+                            if rawPrice > 0 then
+                                local modPrice = getModifiedPrice(rawPrice, relationship, economy, "Sell")
+                                pcall(function() dataFunc:InvokeServer("SellFood", fruit.id, modPrice, nil, nil) end)
+                                totalEarned = totalEarned + modPrice
+                                task.wait(0.2)
                             end
-                        end)
-                        if gemValue > 0 then
-                            pcall(function() dataFunc:InvokeServer("SellingBulk", gemValue, "Gem") end)
-                            Utils.notify("💎 Auto-sold gems (" .. gemValue .. " value)", 3)
-                            Webhook.send("💎 Auto Sell", "Bulk sold **Gems** (value: " .. gemValue .. ")", 3447003)
+                        end
+                        if totalEarned > 0 then
+                            Utils.notify("🍎 Auto-sold max fruits (" .. totalEarned .. " Ryo)", 3)
                         end
                     end
                 end)
