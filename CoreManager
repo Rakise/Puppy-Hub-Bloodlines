@@ -921,9 +921,6 @@ local function AutoLoginRoutine()
     print("[PuppyHub] Starting Auto-Login Routine...")
     local clientGui = PlayerGui:WaitForChild("ClientGui", 30)
     if not clientGui then return end
-    local char = LocalPlayer.Character
-    local humanoid = char and char:FindFirstChildOfClass("Humanoid")
-    local forceFieldVisual = char and char:FindFirstChild("ForceField")
     
     local menuScreen = clientGui:WaitForChild("MenuScreen", 10)
     if menuScreen then
@@ -931,106 +928,24 @@ local function AutoLoginRoutine()
         if loadingScreen then
             repeat task.wait(0.5) until loadingScreen.BackgroundTransparency >= 0.9 or not loadingScreen.Visible
         end
-
-        local autoLoginGate = waitForAutoLoginContinue(menuScreen, 30)
-        if autoLoginGate ~= "Continue" then
-            warn("[PuppyHub] Auto-login aborted before Continue became available.")
-            return
+        local menuFrame = menuScreen:WaitForChild("Menu", 5)
+        if menuFrame then
+            local continueBtn = menuFrame:FindFirstChild("Continue")
+            if continueBtn then
+                task.wait(1)
+                print("[PuppyHub] Found Continue button, attempting click...")
+                
+                -- Virtual click with proper GuiInset handling
+                VirtualMouse.clickGui(continueBtn)
+                print("[PuppyHub] Continue clicked!")
+                
+                task.wait(1)
+            end
         end
-        
-        -- ============================================================
-        -- NATIVE LoadIntoGame REPLICATION
-        -- Mirrors the decompiled function without needing VIM clicks
-        -- ============================================================
-        task.wait(0.25)
-        print("[PuppyHub] Replicating native LoadIntoGame sequence...")
-        
-        -- Step 1: Hide menu frames
-        pcall(function()
-            local menuSelect = menuScreen:FindFirstChild("MenuSelect")
-            if menuSelect then menuSelect.Visible = false end
-        end)
-        pcall(function()
-            local menu = menuScreen:FindFirstChild("Menu")
-            if menu then menu.Visible = false end
-        end)
-        pcall(function()
-            local serverList = menuScreen:FindFirstChild("ServerList") or clientGui:FindFirstChild("ServerList")
-            if serverList then serverList.Visible = false end
-        end)
-        
-        -- Step 2: Invoke the server to register us as loaded in
-        local loadResult = nil
-        pcall(function()
-            loadResult = DataFunction:InvokeServer("LoadedIn")
-        end)
-        print("[PuppyHub] LoadedIn result:", tostring(loadResult))
-
-        stopAutoLoginMenuAnimations(humanoid)
-        
-        task.wait(1)
-
-        -- Step 3: Stop menu music (find and stop any playing sounds in menu)
-        pcall(function()
-            for _, desc in ipairs(menuScreen:GetDescendants()) do
-                if desc:IsA("Sound") and desc.IsPlaying then
-                    desc.Volume = 0
-                    desc:Stop()
-                end
-            end
-        end)
-        
-        -- Step 4: Enable the ServerList GuiHandler if it exists
-        pcall(function()
-            local sl = clientGui:FindFirstChild("ServerList")
-            if sl then
-                local handler = sl:FindFirstChild("GuiHandler")
-                if handler and handler:IsA("LocalScript") then
-                    handler.Disabled = false
-                end
-            end
-        end)
-        
-        pcall(function()
-            local menuServerList = menuScreen:FindFirstChild("ServerList")
-            if menuServerList then
-                menuServerList:Destroy()
-            end
-        end)
-
-        task.wait(0.25)
-        
-        -- Step 5: Hide the menu screen entirely
-        pcall(function()
-            menuScreen.Visible = false
-        end)
-
-        cleanupAutoLoginMenuScene()
-
-        pcall(function()
-            if forceFieldVisual and forceFieldVisual:IsDescendantOf(char) and forceFieldVisual.Visible ~= nil then
-                forceFieldVisual.Visible = true
-            end
-        end)
-        
-        -- Step 6: Reset camera to gameplay mode
-        pcall(function()
-            local cam = Workspace.CurrentCamera
-            cam.CameraType = Enum.CameraType.Custom
-            char = LocalPlayer.Character
-            if char then
-                humanoid = char:FindFirstChildOfClass("Humanoid")
-                if humanoid then
-                    cam.CameraSubject = humanoid
-                end
-            end
-        end)
-        
-        print("[PuppyHub] Native LoadIntoGame complete!")
-        task.wait(1)
     end
     
     task.wait(7)
+
 
     if shouldConsumeHopMarker and isMainBloodlinesPlace then
         deleteHopMarker("AutoLoginRoutine")
