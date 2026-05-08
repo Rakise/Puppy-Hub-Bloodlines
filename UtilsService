@@ -3,10 +3,10 @@
 -- Usage: local Utils = require(path); local utils = Utils.new(); utils:getPlayerData(player)
 
 -- Load sub-modules using loadstring
-local PlayerData = loadstring(game:HttpGet("https://raw.githubusercontent.com/Rakise/Puppy-Hub/refs/heads/main/Utils/PlayerData"))()
--- local ForceField = loadstring(game:HttpGet("https://raw.githubusercontent.com/Rakise/Puppy-Hub/refs/heads/main/Utils/ForceField"))()
-local ToolManager = loadstring(game:HttpGet("https://raw.githubusercontent.com/Rakise/Puppy-Hub/refs/heads/main/Utils/ToolManager"))()
-local BillboardUtils = loadstring(game:HttpGet("https://raw.githubusercontent.com/Rakise/Puppy-Hub/refs/heads/main/Utils/BillboardUtils"))()
+local PlayerData = loadstring(game:HttpGet("https://ghproxy.net/https://raw.githubusercontent.com/Rakise/Puppy-Hub/refs/heads/main/Utils/PlayerData"))()
+-- local ForceField = loadstring(game:HttpGet("https://ghproxy.net/https://raw.githubusercontent.com/Rakise/Puppy-Hub/refs/heads/main/Utils/ForceField"))()
+local ToolManager = loadstring(game:HttpGet("https://ghproxy.net/https://raw.githubusercontent.com/Rakise/Puppy-Hub/refs/heads/main/Utils/ToolManager"))()
+local BillboardUtils = loadstring(game:HttpGet("https://ghproxy.net/https://raw.githubusercontent.com/Rakise/Puppy-Hub/refs/heads/main/Utils/BillboardUtils"))()
 
 local UtilsService = {}
 UtilsService.__index = UtilsService

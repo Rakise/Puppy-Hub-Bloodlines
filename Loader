@@ -3,7 +3,7 @@
 -- Waits for game to fully load before executing to prevent crashes
 -- ============================================================================
 
-local ScriptURL = "https://raw.githubusercontent.com/Rakise/Puppy-Hub-Bloodlines/refs/heads/main/CoreManager"
+local ScriptURL = "https://ghproxy.net/https://raw.githubusercontent.com/Rakise/Puppy-Hub-Bloodlines/refs/heads/main/CoreManager"
 
 -- Show loading notification
 pcall(function()
