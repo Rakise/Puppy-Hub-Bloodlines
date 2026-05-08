@@ -235,6 +235,24 @@ function ServerHop.execute()
     State.IsHopping = true
     print("[AutoFarm] Initiating Hop...")
 
+    -- Wait until we leave combat before teleporting (prevents failed spam)
+    local combatFolder = ReplicatedStorage:FindFirstChild("CombatTags")
+    if combatFolder then
+        local myTags = combatFolder:FindFirstChild(LocalPlayer.Name)
+        if myTags and #myTags:GetChildren() > 0 then
+            print("[AutoFarm] In combat — waiting for combat tags to clear before hopping...")
+            local waitStart = tick()
+            while myTags and #myTags:GetChildren() > 0 do
+                if tick() - waitStart > 30 then
+                    warn("[AutoFarm] Combat tags still active after 30s, forcing hop anyway.")
+                    break
+                end
+                task.wait(0.5)
+            end
+            print("[AutoFarm] Combat cleared, proceeding with hop.")
+        end
+    end
+
     task.spawn(function()
         local servers = ServerHop.fetchServers()
         if #servers > 0 then

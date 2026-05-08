@@ -19,6 +19,49 @@ local VirtualInputManager = (function()
 end)()
 
 -- ============================================================================
+-- ANTICHEAT INTERCEPTOR & REMOTE HOOK
+-- Blocks: BanMe, KickMe, FlagMe (always)
+-- Blocks: voidDamage, InflictFire (when Prevent Void enabled)
+-- ============================================================================
+local DataEvent = ReplicatedStorage:WaitForChild("Events"):WaitForChild("DataEvent")
+local DataFunction = ReplicatedStorage:WaitForChild("Events"):WaitForChild("DataFunction")
+
+-- Forward-declared; State table is defined later but the hook closure captures the reference
+local _preventVoidCheck = false -- updated by State.PreventVoidEnabled toggle
+
+local oldNamecall
+oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
+    local method = getnamecallmethod()
+    local args = {...}
+    if not checkcaller() and method == "FireServer" and self == DataEvent then
+        local action = args[1]
+        -- Always block anticheat punishment remotes
+        if action == "BanMe" or action == "KickMe" or action == "FlagMe" then
+            warn("[PuppyHub] 🛡️ Anticheat Blocked:", action, args[2])
+            return
+        end
+        -- Block void/lava damage remotes when Prevent Void is enabled
+        if _preventVoidCheck and (action == "voidDamage" or action == "InflictFire") then
+            return
+        end
+    end
+    return oldNamecall(self, ...)
+end))
+print("[PuppyHub] ✅ Anticheat Interceptor injected.")
+
+-- ============================================================================
+-- COMBAT TAG CHECK (for pre-hop safety)
+-- CombatTags live at ReplicatedStorage.CombatTags[PlayerName]
+-- ============================================================================
+local function isInCombat()
+    local combatFolder = ReplicatedStorage:FindFirstChild("CombatTags")
+    if not combatFolder then return false end
+    local myTags = combatFolder:FindFirstChild(game.Players.LocalPlayer.Name)
+    if not myTags then return false end
+    return #myTags:GetChildren() > 0
+end
+
+-- ============================================================================
 -- VIRTUAL MOUSE SYSTEM
 -- Uses VIM + GuiInset to properly simulate mouse input at GUI element positions.
 -- GuiInset is the TopBar offset that shifts all AbsolutePosition values.
@@ -172,8 +215,31 @@ local State = {
     Fly = false, FlySpeed = 50, FallSpeed = 25,
     Noclip = false, NoclipSpeed = 150, NoclipTween = 1,
     CFrameSpeed = false, CFrameSpeedValue = 1,
-    PanicModeOption = true, IsPanicMode = false
+    PanicModeOption = true, IsPanicMode = false,
+    NegateFallEnabled = false,
+    PreventVoidEnabled = false
 }
+
+local function injectFallImmunity(character)
+    if not State.NegateFallEnabled then return end
+    if character and not character:FindFirstChild("NegateFall") then
+        local tag = Instance.new("BoolValue")
+        tag.Name = "NegateFall"
+        tag.Parent = character
+    end
+end
+
+local function injectVoidImmunity(character)
+    if not State.PreventVoidEnabled then return end
+    if character then
+        character:SetAttribute("VoidResistance", true)
+    end
+end
+
+LocalPlayer.CharacterAdded:Connect(function(char)
+    injectFallImmunity(char)
+    injectVoidImmunity(char)
+end)
 
 local CoreConnections = {} -- Holds explicit RunService connections
 
@@ -670,20 +736,73 @@ local function AutoLoginRoutine()
         if loadingScreen then
             repeat task.wait(0.5) until loadingScreen.BackgroundTransparency >= 0.9 or not loadingScreen.Visible
         end
-        local menuFrame = menuScreen:WaitForChild("Menu", 5)
-        if menuFrame then
-            local continueBtn = menuFrame:FindFirstChild("Continue")
-            if continueBtn then
-                task.wait(1)
-                print("[PuppyHub] Found Continue button, attempting click...")
-                
-                -- Virtual click with proper GuiInset handling
-                VirtualMouse.clickGui(continueBtn)
-                print("[PuppyHub] Continue clicked!")
-                
-                task.wait(1)
+        
+        -- ============================================================
+        -- NATIVE LoadIntoGame REPLICATION
+        -- Mirrors the decompiled function without needing VIM clicks
+        -- ============================================================
+        task.wait(1)
+        print("[PuppyHub] Replicating native LoadIntoGame sequence...")
+        
+        -- Step 1: Hide menu frames
+        pcall(function()
+            local menu = menuScreen:FindFirstChild("Menu")
+            if menu then menu.Visible = false end
+        end)
+        pcall(function()
+            local serverList = menuScreen:FindFirstChild("ServerList") or clientGui:FindFirstChild("ServerList")
+            if serverList then serverList.Visible = false end
+        end)
+        
+        -- Step 2: Invoke the server to register us as loaded in
+        local loadResult = nil
+        pcall(function()
+            loadResult = DataFunction:InvokeServer("LoadedIn")
+        end)
+        print("[PuppyHub] LoadedIn result:", tostring(loadResult))
+        
+        -- Step 3: Stop menu music (find and stop any playing sounds in menu)
+        pcall(function()
+            for _, desc in ipairs(menuScreen:GetDescendants()) do
+                if desc:IsA("Sound") and desc.IsPlaying then
+                    desc:Stop()
+                end
             end
-        end
+        end)
+        
+        -- Step 4: Enable the ServerList GuiHandler if it exists
+        pcall(function()
+            local sl = clientGui:FindFirstChild("ServerList")
+            if sl then
+                local handler = sl:FindFirstChild("GuiHandler")
+                if handler and handler:IsA("LocalScript") then
+                    handler.Disabled = false
+                end
+            end
+        end)
+        
+        task.wait(0.5)
+        
+        -- Step 5: Hide the menu screen entirely
+        pcall(function()
+            menuScreen.Visible = false
+        end)
+        
+        -- Step 6: Reset camera to gameplay mode
+        pcall(function()
+            local cam = Workspace.CurrentCamera
+            cam.CameraType = Enum.CameraType.Custom
+            local char = LocalPlayer.Character
+            if char then
+                local hum = char:FindFirstChildOfClass("Humanoid")
+                if hum then
+                    cam.CameraSubject = hum
+                end
+            end
+        end)
+        
+        print("[PuppyHub] Native LoadIntoGame complete!")
+        task.wait(1)
     end
     
     task.wait(7)
@@ -847,12 +966,11 @@ end
 
 local Window = Library:CreateWindow({
     Title = '[Puppy Hub] Bloodlines 🩸',
-    Center = not isFarmRedirect, -- Center on fresh join, bottom-right on farm redirect
+    Center = not isFarmRedirect,
     AutoShow = true, TabPadding = 8, MenuFadeTime = 0.2,
     Size = UDim2.fromOffset(700, 600)
 })
 
--- On farm redirect: move UI to bottom-right corner so it doesn't block the view
 if isFarmRedirect then
     task.defer(function()
         pcall(function()
@@ -863,7 +981,6 @@ if isFarmRedirect then
                 screenSize.X - windowSize.X - padding,
                 screenSize.Y - windowSize.Y - padding
             )
-            -- Linoria stores the main frame in Library.Main
             if Library.Main then
                 Library.Main.Position = targetPos
             end
@@ -887,6 +1004,34 @@ local MoveGroup = Tabs.Movement:AddLeftGroupbox('Character')
 local FlyGroup = Tabs.Movement:AddRightGroupbox('Fly')
 local NoclipGroup = Tabs.Movement:AddLeftGroupbox('Noclip')
 local CFrameGroup = Tabs.Movement:AddRightGroupbox('CFrame Speed')
+
+MoveGroup:AddToggle('FallDamageToggle', {
+    Text = 'Remove Fall Damage',
+    Default = false,
+    Callback = function(val)
+        State.NegateFallEnabled = val
+        if val and LocalPlayer.Character then
+            injectFallImmunity(LocalPlayer.Character)
+        elseif not val and LocalPlayer.Character then
+            local tag = LocalPlayer.Character:FindFirstChild("NegateFall")
+            if tag then tag:Destroy() end
+        end
+    end
+})
+
+MoveGroup:AddToggle('PreventVoidToggle', {
+    Text = 'Prevent Void',
+    Default = false,
+    Callback = function(val)
+        State.PreventVoidEnabled = val
+        _preventVoidCheck = val
+        if val and LocalPlayer.Character then
+            injectVoidImmunity(LocalPlayer.Character)
+        elseif not val and LocalPlayer.Character then
+            LocalPlayer.Character:SetAttribute("VoidResistance", nil)
+        end
+    end
+})
 
 MoveGroup:AddToggle('WalkSpeedToggle', {
     Text = 'Enable WalkSpeed',
