@@ -468,26 +468,11 @@ function Utils.getBossRoot(model)
         or model:FindFirstChildWhichIsA("BasePart")
 end
 
--- Uses client-side Terrain water to grant absolute fall damage immunity upon arrival
+-- Direct teleport (fall damage handled by NegateFall injection in CoreManager)
 function Utils.safeTeleport(targetCFrame)
     local pData = Utils.getPlayerData()
     if not pData then return end
-    local pos = targetCFrame.Position
-    
-    if (pData.rootPart.Position - pos).Magnitude < 50 then
-        pData.rootPart.CFrame = targetCFrame
-        return
-    end
-    
-    -- Spawn a larger water bubble at destination to absorb fall damage reliably.
-    pcall(function() workspace.Terrain:FillBall(pos, 27, Enum.Material.Water) end)
-    RunService.Heartbeat:Wait()
-    -- Teleport directly into the water
     pData.rootPart.CFrame = targetCFrame
-    -- Let physics engine fully register the Swim state before removing the bubble.
-    task.wait(0.5)
-    -- Remove the water
-    pcall(function() workspace.Terrain:FillBall(pos, 27, Enum.Material.Air) end)
 end
 function Utils.disconnectAll()
     for i = #State.connections, 1, -1 do
