@@ -107,7 +107,7 @@ local BOSS_CONFIGS = {
         lootSpot = Vector3.new(-546.7, -546.9, -1461.6),
     },
     ["Haku Boss"] = {
-        height = 18, positionAbove = true, minCombatHeight = 18,
+        height = 10.75, positionAbove = true, minCombatHeight = 10.75,
         hasIceDragon = true,
         lootSpot = Vector3.new(-3788.1, -238.5, -9723.9),
     },
