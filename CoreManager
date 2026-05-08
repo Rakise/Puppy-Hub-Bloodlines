@@ -770,6 +770,9 @@ local function waitForAutoLoginContinue(menuScreen, timeoutSeconds)
     local menu = menuScreen and menuScreen:FindFirstChild("Menu")
     local continueButton = menu and menu:FindFirstChild("Continue")
     local newGameButton = menu and menu:FindFirstChild("NewGame")
+    local readySince = nil
+    local sawLoadingActive = false
+    local sawMenuOffscreen = false
 
     if not menu or not continueButton then
         warn("[PuppyHub] Auto-login could not find the menu continue gate.")
@@ -778,6 +781,13 @@ local function waitForAutoLoginContinue(menuScreen, timeoutSeconds)
 
     while tick() < deadline do
         local loadingScreen = menuScreen:FindFirstChild("LoadingScreen")
+        local loadingActive = loadingScreen
+            and loadingScreen.Visible
+            and loadingScreen.BackgroundTransparency < 0.98
+        if loadingActive then
+            sawLoadingActive = true
+        end
+
         local loadingDone = not loadingScreen
             or not loadingScreen.Visible
             or loadingScreen.BackgroundTransparency >= 0.98
@@ -786,9 +796,21 @@ local function waitForAutoLoginContinue(menuScreen, timeoutSeconds)
             and menu.AbsoluteSize.Y > 0
             and menu.Position.X.Offset >= -5
             and menu.Position.Y.Offset <= -190
+        if menu.Position.X.Offset < -25 then
+            sawMenuOffscreen = true
+        end
 
         if loadingDone and menuReady and continueButton.Visible then
-            return "Continue"
+            if not readySince then
+                readySince = tick()
+            end
+
+            local stableDelay = (sawLoadingActive or sawMenuOffscreen) and 0.75 or 1.5
+            if tick() - readySince >= stableDelay then
+                return "Continue"
+            end
+        else
+            readySince = nil
         end
 
         if loadingDone and menuReady and newGameButton and newGameButton.Visible then
