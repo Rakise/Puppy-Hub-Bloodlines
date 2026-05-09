@@ -3000,7 +3000,7 @@ function Positioning.getCombatCFrame(playerRoot, bossRoot, config)
 end
 
 function Positioning.primeCombatOffsets(model, config)
-    State.combatStabilizeUntil = tick() + 0.35
+    State.combatStabilizeUntil = tick() + 1.0
 
     local playerData = Utils.getPlayerData()
     local bossRoot = Utils.getBossRoot(model)
@@ -3260,16 +3260,16 @@ function Farm.farmBoss(hum, model, bossName)
     -- Monitor knocked state for auto-grip
     Knocked.monitor(model)
     
-    -- Start charging for bonus damage
+    -- Start noclip + anchor BEFORE charge delay so player is held at correct height
+    Combat.enableNoclip()
+    Positioning.startAnchoring(model, config)
+    
+    -- Now safe to wait for charging (anchor is holding position)
     task.wait(0.5)
     Charging.start()
     Utils.setMode("engaging")
     
     Utils.notify("Farming: " .. bossName, 3)
-    
-    -- Start noclip, positioning, and attacking
-    Combat.enableNoclip()
-    Positioning.startAnchoring(model, config)
     Combat.startAttacking(model)
     
     -- Health + safety monitor loop
@@ -3418,10 +3418,12 @@ function Farm.farmBoss(hum, model, bossName)
                     AnimMonitors.setup(model, bossName, config)
                     Positioning.primeCombatOffsets(model, config)
                     Knocked.monitor(model)
-                    task.wait(0.5)
-                    Charging.start()
+                    -- Start noclip + anchor BEFORE charge delay so player is held at correct height
                     Combat.enableNoclip()
                     Positioning.startAnchoring(model, config)
+                    -- Now safe to wait for charging (anchor is holding position)
+                    task.wait(0.5)
+                    Charging.start()
                     Combat.startAttacking(model)
                     Utils.setMode("engaging")
                     Utils.notify("Re-engaging: " .. bossName, 2)
