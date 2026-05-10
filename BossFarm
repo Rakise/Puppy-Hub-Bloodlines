@@ -152,7 +152,9 @@ local BOSS_CONFIGS = {
         triggerSpawn = true,
         triggerPos = Vector3.new(1418.9, -474.4, -595.8),
         minionRadius = 100,
-        minionHeight = 5.5,
+        minionHeight = -14,
+        orbitRadius = 5,
+        orbitSpeed = 10,
     },
 }
 
@@ -2485,32 +2487,32 @@ function Knocked.clearRingedSamuraiMinions(model, dataEvent)
     Utils.recordEvent("Ringed Adds", "Found " .. tostring(#minions) .. " LavaLight")
 
     local config = BOSS_CONFIGS["The Ringed Samurai"] or {}
-    local yOffset = config.minionHeight or 5.5
+    local yOffset = config.minionHeight or -14
 
-    for _, minionData in ipairs(minions) do
-        if not State.running or State.currentBoss ~= "The Ringed Samurai" then
-            break
-        end
+    local clearDeadline = tick() + 8
+    while State.running and tick() < clearDeadline and State.currentBoss == "The Ringed Samurai" do
+        local currentMinions = Knocked.findRingedSamuraiMinions(model)
+        if #currentMinions == 0 then break end
 
-        local minion = minionData.model
-        local hum = minionData.humanoid
-        local root = Utils.getBossRoot(minion)
-        if hum and hum.Health > 0 and root then
-            Utils.recordEvent("Ringed Add Clear", tostring(minion.Name))
+        local pData = Utils.getPlayerData()
+        if not pData then break end
 
-            local clearDeadline = tick() + 4
-            while State.running and hum.Parent and hum.Health > 0 and root.Parent and tick() < clearDeadline do
-                local pData = Utils.getPlayerData()
-                if not pData then break end
+        local centerPos = Vector3.new()
+        for _, m in ipairs(currentMinions) do centerPos = centerPos + m.root.Position end
+        centerPos = centerPos / #currentMinions
 
-                local holdPos = root.Position + Vector3.new(0, yOffset, 0)
-                pData.rootPart.CFrame = CFrame.lookAt(holdPos, root.Position)
-                pcall(function() dataEvent:FireServer("Dash", "Sub", root.Position) end)
-                task.wait(0.03)
-                pcall(function() dataEvent:FireServer("CheckMeleeHit", nil, "NormalAttack", false) end)
-                task.wait(0.08)
+        local holdPos = centerPos + Vector3.new(0, yOffset, 0)
+        pData.rootPart.CFrame = CFrame.lookAt(holdPos, centerPos)
+
+        for _, m in ipairs(currentMinions) do
+            if m.humanoid.Health > 0 and m.root then
+                pcall(function() dataEvent:FireServer("Dash", "Sub", m.root.Position) end)
             end
         end
+        
+        task.wait(0.03)
+        pcall(function() dataEvent:FireServer("CheckMeleeHit", nil, "NormalAttack", false) end)
+        task.wait(0.12)
     end
 
     return true
@@ -2996,6 +2998,12 @@ function Positioning.getCombatCFrame(playerRoot, bossRoot, config)
     local direction = config.positionAbove and 1 or -1
     local safeHeight = math.max(math.abs(totalHeight), minimumOffset, config.minCombatHeight or 0)
     local targetPosition = bossRoot.Position + Vector3.new(0, direction * safeHeight, 0)
+    
+    if config.orbitRadius then
+        local angle = tick() * (config.orbitSpeed or 5)
+        targetPosition = targetPosition + Vector3.new(math.cos(angle) * config.orbitRadius, 0, math.sin(angle) * config.orbitRadius)
+    end
+    
     return CFrame.lookAt(targetPosition, bossRoot.Position)
 end
 
