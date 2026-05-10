@@ -152,7 +152,7 @@ local BOSS_CONFIGS = {
         triggerSpawn = true,
         triggerPos = Vector3.new(1418.9, -474.4, -595.8),
         minionRadius = 100,
-        minionHeight = -14,
+        minionHeight = -7.5,
         orbitRadius = 5,
         orbitSpeed = 10,
     },
@@ -2497,21 +2497,19 @@ function Knocked.clearRingedSamuraiMinions(model, dataEvent)
         local pData = Utils.getPlayerData()
         if not pData then break end
 
-        local centerPos = Vector3.new()
-        for _, m in ipairs(currentMinions) do centerPos = centerPos + m.root.Position end
-        centerPos = centerPos / #currentMinions
-
-        local holdPos = centerPos + Vector3.new(0, yOffset, 0)
-        pData.rootPart.CFrame = CFrame.lookAt(holdPos, centerPos)
-
+        local targetMinion = nil
         for _, m in ipairs(currentMinions) do
             if m.humanoid.Health > 0 and m.root then
-                pcall(function() dataEvent:FireServer("Dash", "Sub", m.root.Position) end)
+                targetMinion = m
+                break
             end
         end
-        
-        task.wait(0.03)
-        pcall(function() dataEvent:FireServer("CheckMeleeHit", nil, "NormalAttack", false) end)
+
+        if targetMinion then
+            local holdPos = targetMinion.root.Position + Vector3.new(0, yOffset, 0)
+            pData.rootPart.CFrame = CFrame.lookAt(holdPos, targetMinion.root.Position)
+            pcall(function() dataEvent:FireServer("CheckMeleeHit", nil, "NormalAttack", false) end)
+        end
         task.wait(0.12)
     end
 
@@ -2924,20 +2922,42 @@ function Combat.startAttacking(model)
             end
             
             local attackPosition = nil
-            if model and model.Parent then
+            local targetingMinions = false
+            
+            if State.currentBoss == "The Ringed Samurai" then
+                local minions = Knocked.findRingedSamuraiMinions(model)
+                if #minions > 0 then
+                    targetingMinions = true
+                    local targetMinion = nil
+                    for _, m in ipairs(minions) do
+                        if m.humanoid.Health > 0 and m.root then
+                            targetMinion = m
+                            break
+                        end
+                    end
+                    if targetMinion then
+                        attackPosition = targetMinion.root.Position
+                    end
+                end
+            end
+
+            if not attackPosition and model and model.Parent then
                 local bossRoot = Utils.getBossRoot(model)
                 if bossRoot then
                     attackPosition = bossRoot.Position
                     State.lastBossPosition = attackPosition
                 end
             end
+            
             if not attackPosition and tick() < (State.bossDeathAttackUntil or 0) then
                 attackPosition = State.lastBossPosition
             end
 
             if dataEvent and attackPosition then
-                pcall(function() dataEvent:FireServer("Dash", "Sub", attackPosition) end)
-                task.wait(0.05)
+                if not targetingMinions then
+                    pcall(function() dataEvent:FireServer("Dash", "Sub", attackPosition) end)
+                    task.wait(0.05)
+                end
                 pcall(function() dataEvent:FireServer("CheckMeleeHit", nil, "NormalAttack", false) end)
             end
             
@@ -2981,6 +3001,23 @@ end
 
 function Positioning.getCombatCFrame(playerRoot, bossRoot, config)
     if not playerRoot or not bossRoot or not config then return nil end
+    
+    if State.currentBoss == "The Ringed Samurai" then
+        local minions = Knocked.findRingedSamuraiMinions(State.currentBossModel)
+        if #minions > 0 then
+            local targetMinion = nil
+            for _, m in ipairs(minions) do
+                if m.humanoid.Health > 0 and m.root then
+                    targetMinion = m
+                    break
+                end
+            end
+            if targetMinion then
+                local holdPos = targetMinion.root.Position + Vector3.new(0, config.minionHeight or -14, 0)
+                return CFrame.lookAt(holdPos, targetMinion.root.Position)
+            end
+        end
+    end
 
     local baseHeight = (config.height or 15) + (State.weaponHeightBoost or 0)
     local totalHeight = baseHeight + (State.bossHeightBoost or 0)
